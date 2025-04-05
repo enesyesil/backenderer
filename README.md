@@ -1,4 +1,4 @@
-# backenderer -- Backend Platform with AWS and Terraform
+# backenderer -- Backend Platform with AWS and Terraform 
 
 Welcome to the Backenderer Platform! This platform enables users to deploy, manage, and monitor their backend applications seamlessly, with support for scalable infrastructure, dynamic API endpoints, and extensibility for various backend frameworks like Spring Boot, Flask, and more.
 
@@ -143,10 +143,6 @@ myplatform deploy --app spring-boot-app --env production
 
 ---
 
-## **Contributing**
-
-We welcome contributions! Please read the [CONTRIBUTING.md](./CONTRIBUTING.md) file for guidelines.
-
 ---
 
 ## **License**
@@ -154,7 +150,3 @@ We welcome contributions! Please read the [CONTRIBUTING.md](./CONTRIBUTING.md) f
 This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
 
 ---
-
-## **Contact**
-
-For questions or support, reach out at **support@yourplatform.com** or open an issue in the repository.
