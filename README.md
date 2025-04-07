@@ -1,4 +1,6 @@
 # backenderer -- Backend Platform with AWS and Terraform 
+![Project Status: Planning](https://img.shields.io/badge/status-planning-yellow)
+
 
 Welcome to the Backenderer Platform! This platform enables users to deploy, manage, and monitor their backend applications seamlessly, with support for scalable infrastructure, dynamic API endpoints, and extensibility for various backend frameworks like Spring Boot, Flask, and more.
 
