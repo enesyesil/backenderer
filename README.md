@@ -143,6 +143,10 @@ myplatform deploy --app spring-boot-app --env production
 4. **Multi-Cloud Support**:
    - Extend platform compatibility to GCP and Azure.
 
+Proposed project design look like this; 
+
+![Project Design](./diagram.png)
+
 ---
 
 ---
