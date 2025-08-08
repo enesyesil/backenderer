@@ -1,166 +1,100 @@
-# backenderer -- Backend Platform with AWS and Terraform 
+
+
+
+# Backenderer
 ![Project Status: Planning](https://img.shields.io/badge/status-planning-yellow)
 
-
-Backenderer is a backend deployment platform I’m building from scratch as a personal project. It allows developers to deploy their containerized backend applications (like Spring Boot, Flask, Express, etc.) using GitHub and Docker, and automatically routes them to unique URLs on a single EC2 instance.
-
-This platform is designed to start lightweight — using Docker and Nginx on a single AWS EC2 machine — while still following infrastructure-as-code principles with Terraform. In the future, it can scale to more complex setups like ECS, Lambda, or multi-cloud environments.
+**Backenderer** is a lightweight, secure, and decentralized backend deploy kit for students and hobbyists.  
+Deploy your backend app to your own AWS account in **seconds** — no servers to manage, no SSH needed.
 
 ---
 
-## Features
-
-- Deploy any backend stack via Docker and GitHub Actions
-- Dynamic route mapping per app: `https://api.backenderer.com/{user}/{app}`
-- Apps run in isolated containers on a shared EC2 instance
-- Reverse proxy via Nginx (routes requests to the correct container)
-- GitHub Action builds, pushes, and deploys the app automatically
-- Terraform-provisioned infrastructure (EC2, networking, security groups)
-- Easy to maintain, extremely cost-effective in early stages
-
----
-
-## How It Works
-
-1. You write a backend app with a `Dockerfile` and a `backenderer.yml` config.
-2. You push your code to GitHub.
-3. A GitHub Action builds the Docker image, pushes it to a registry (ECR or Docker Hub), SSHs into the EC2 instance, and deploys it.
-4. The app is automatically routed via Nginx.
-
-
+##  Features
+- **Two Deployment Modes**
+  1. **Source Build** → Put your code + `Dockerfile` in `/app` (must listen on port `8080` inside container).
+  2. **Image Deploy** → Put your Docker image URI in `/image/ref.txt` (e.g., `ghcr.io/username/project:tag`).
+- **Secure by Default**
+  - No SSH, SSM-only
+  - Hardened Docker & Nginx configs
+  - TLS 1.2/1.3 + HSTS + rate limits
+- **AWS Native**
+  - OIDC-based deploy from GitHub Actions
+  - Push images to Amazon ECR
+  - Run on Amazon Linux EC2 (t3.micro by default)
 
 ---
 
-## **Core Components**
+## Repo Structure
 
-Backenderer is composed of the following core components:
+- /app # Option A: Put your source code + Dockerfile here
+- /image/ref.txt # Option B: Put your existing Docker image URI here
+- /aws/role.yaml # AWS OIDC deploy role (CloudFormation)
+- /aws/instance.cfn.yaml # EC2 + SG + IAM + optional Route53 stack
+- /bootstrap/ # EC2 user-data templates
+- /scripts/ # register/unregister app scripts (run via SSM)
+- /.github/workflows/deploy_ec2.yml # GitHub Actions pipeline
 
-- **EC2 Instance (AWS)**  
-  A single Amazon EC2 instance runs all user-deployed backend containers using Docker. It is provisioned and managed using Terraform.
-
-- **Docker**  
-  Every backend application is packaged and deployed as a Docker container. Containers are run on dynamic ports and isolated per user and app.
-
-- **Nginx Reverse Proxy**  
-  Nginx serves as a central entry point, routing incoming requests to the appropriate container using dynamic URL paths like `/user123/inventory-api`.
-
-- **GitHub Actions (CI/CD)**  
-  Users deploy their applications by pushing to their GitHub repository. A GitHub Action builds and pushes the Docker image, then connects to the EC2 host to deploy and start the container.
-
-- **backenderer.yml**  
-  Each application repository includes a `backenderer.yml` configuration file that defines the app name, owner ID, port, and other metadata used during deployment and routing.
-
-- **Terraform (Infrastructure as Code)**  
-  Terraform provisions and manages the EC2 host, networking, and security group configurations.
-
-- **Docker Registry (ECR or Docker Hub)**  
-  Built container images are pushed to a container registry. The EC2 host pulls the images before running them.
 
 
 ---
 
-## **Prerequisites**
+##  Quick Start
 
-To deploy your backend application to Backenderer, you must have the following:
+### 1. Fork this repo
 
-### Tools Installed Locally
+### 2. Choose a deployment mode
 
-- **Docker** — for building your backend app as a container image.
-- **Git** — to manage your project and push changes to GitHub.
-- **YAML support in CI** — `yq` (used in GitHub Actions for reading `backenderer.yml`).
+#### Option A – Build from Source
+1. Add your app code and `Dockerfile` under `/app/`.
+2. Ensure your app listens on **port 8080** inside the container.
 
-### GitHub Repository Structure
+#### Option B – Deploy Existing Image
+1. Put your image URI in `/image/ref.txt`:
 
-- A valid `Dockerfile` in the root or project directory.
-- A `backenderer.yml` file containing metadata for the app.
-- A GitHub Actions workflow (`.github/workflows/deploy.yml`) that handles deployment.
-
-### Required GitHub Secrets (in your app repo)
-
-| Secret Name            | Purpose                                              |
-|------------------------|------------------------------------------------------|
-| `AWS_ACCESS_KEY_ID`    | For pushing Docker images to your ECR repo           |
-| `AWS_SECRET_ACCESS_KEY`| For accessing AWS services securely                  |
-| `ECR_REPO_URL`         | Your Docker image registry URL (ECR or Docker Hub)   |
-| `EC2_HOST`             | IP or domain name of the Backenderer EC2 instance    |
-| `EC2_USER`             | SSH user for the EC2 instance (typically `ec2-user`) |
-| `DEPLOY_KEY`           | SSH private key to access EC2 and run deployment     |
-
----
-
-## **Usage**
-
-To deploy your backend app to Backenderer:
-
-1. Ensure your repository includes a `Dockerfile`, `backenderer.yml`, and GitHub Actions workflow.
-2. Make sure the required GitHub Secrets are configured.
-3. Push your code to the main branch.
-4. Backenderer will build, deploy, and route your app automatically.
 
 
 ---
 
-## **High-Level Architecture Breakdown**
+### 3. Set up AWS OIDC Role
 
-
-![Architecture Overview](./diagram.png)
-
----
-
-## **High-Level Component Breakdown**
-
-Backenderer is split into a few major components so I can manage things cleanly and scale later without rebuilding everything from scratch. Each part handles a focused job, which makes it easier to update or swap out later as the project grows.
-
-### 1. Infrastructure (Terraform)
-This is the part that sets up the whole environment. I use Terraform to provision an EC2 instance on AWS, install Docker and Nginx, open up ports, and configure security groups. It’s a one-time setup unless I want to scale it later.
-
-- Code lives in: `backenderer-infra/`
+1. In AWS Console → **CloudFormation** → create stack with `/aws/role.yaml`.
+2. Copy the output **DeployRoleArn**.
 
 ---
 
-### 2. Deployment Engine
-This handles pulling the app’s Docker image, running it on the EC2 instance, and assigning it a port. It’s triggered from GitHub Actions and can also be run manually if needed (later I might make this a CLI or lightweight service).
+### 4. Add GitHub Actions Secrets
+
+In your fork → **Settings → Secrets and Variables → Actions**:
+- `AWS_ROLE_ARN` → The DeployRoleArn from step 3
+- `AWS_REGION` → e.g., `us-east-1`
+- *(Optional)* `DOMAIN_NAME` and `HOSTED_ZONE_ID` for HTTPS on a custom domain.
 
 ---
 
-### 3. Routing Layer
-When a new app is deployed, it gets its own Nginx route. This layer generates a config that maps a path like `/user123/todo-api` to the right container and port. After updating, it reloads Nginx to apply the new routes.
+### 5. Deploy 
+
+1. Go to your fork → **Actions** → **Deploy to AWS (EC2)** → **Run workflow**.
+2. Wait for completion.
+3. Get your app URL from workflow output
 
 ---
 
-### 4. CI/CD (GitHub Actions)
-Each backend repo that wants to deploy to Backenderer uses a GitHub Action. It reads the config file (`backenderer.yml`), builds the image, pushes it to a Docker registry, and then deploys it to the EC2 host via SSH.
+##  Security Defaults
+- No SSH (SSM only)
+- IMDSv2 enforced
+- Least privilege IAM
+- Hardened Nginx (TLS 1.2/1.3, HSTS, CSP)
+- Docker: non-root, read-only FS, dropped capabilities, resource limits
 
 ---
 
-### 5. App Metadata
-This is the info that tells Backenderer what to do. Each app has a `backenderer.yml` file that includes stuff like:
-```yaml
-app_name: todo-api
-owner_id: user123
-container_port: 5000 
-```
----
-
-### 6. Docker Image + Registry
-Apps get built into Docker images and pushed to a container registry. I’m using Amazon ECR for now, but Docker Hub would work too. When it’s time to deploy, the EC2 host pulls the image using the tag from the GitHub Action.
+##  Extending
+Future versions will add:
+- GCP & Azure support
+- Custom container ports
+- Automatic CloudWatch logging & alarms
+- Per-app Basic Auth
 
 ---
 
-### 7. Local Container Tracking
-This part just keeps track of what’s running on the EC2 host. I’m using a simple `app-registry.json` file that logs:
-
-- Which apps are deployed
-- What port each container is running on
-- Who owns it
-
----
-
-### **8. (Optional) Dashboard/API Layer**
-- **Purpose**: Future enhancement to allow visual management of deployed apps.
-- **Features**: View running containers, routes, logs, and usage.
-- **Status**: Planned for future phases.
-- But I guess it would take time for this to develop. 
-
-
-
+**Backenderer** – Deploy your backend, anywhere, in seconds.
