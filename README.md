@@ -87,6 +87,51 @@ In your fork → **Settings → Secrets and Variables → Actions**:
 - Docker: non-root, read-only FS, dropped capabilities, resource limits
 
 ---
+## 💰 AWS Cost Estimate
+
+Backenderer is designed to be **student & hobbyist friendly** — you can usually run it for free (first year) or very cheap after that.
+
+### Free Tier (First 12 months)
+- **EC2 t3.micro** (750 hrs/month) → FREE  
+- **EBS Storage (8–10 GB)** → FREE  
+- **ECR (500 MB storage)** → FREE  
+- **SSM / CloudFormation** → FREE  
+- **Data transfer** → 1 GB/month outbound FREE  
+
+> ✅ If you’re in your AWS Free Tier period, you can run Backenderer 24/7 at **$0 cost**.
+
+---
+
+### After Free Tier
+Typical monthly costs (for one always-on instance):
+
+| Service          | Cost Estimate |
+|------------------|---------------|
+| EC2 t3.micro     | $7–8 / month |
+| EBS (10 GB)      | ~$1 / month |
+| ECR (small usage)| $0–1 / month |
+| Data transfer    | ~$1–2 / month (light traffic) |
+| **Total**        | **$10–12 / month** |
+
+---
+
+### Optional Domain (Route53 + TLS)
+- Domain name: ~$12/year  
+- Hosted zone: $0.50/month  
+- DNS queries: negligible  
+- Certificates: FREE (Let’s Encrypt via certbot)  
+
+> With a domain: expect **+$1/month** plus domain registration cost.
+
+---
+
+**Summary:**  
+- Free in Year 1 (if you use AWS Free Tier).  
+- After Free Tier: **~$10–15/month** steady state.  
+
+---
+
+
 
 ##  Extending
 Future versions will add:
