@@ -26,13 +26,13 @@ Deploy your backend app to your own AWS account in **seconds** — no servers to
 
 ## Repo Structure
 
-- /app # Option A: Put your source code + Dockerfile here
-- /image/ref.txt # Option B: Put your existing Docker image URI here
-- /aws/role.yaml # AWS OIDC deploy role (CloudFormation)
-- /aws/instance.cfn.yaml # EC2 + SG + IAM + optional Route53 stack
-- /bootstrap/ # EC2 user-data templates
-- /scripts/ # register/unregister app scripts (run via SSM)
-- /.github/workflows/deploy_ec2.yml # GitHub Actions pipeline
+- `/app` — Option A: Put your source code + Dockerfile here  
+- `/image/ref.txt` — Option B: Put your existing Docker image URI here  
+- `/aws/role.yaml` — AWS OIDC deploy role (CloudFormation)  
+- `/aws/instance.cfn.yaml` — EC2 + SG + IAM + optional Route53 stack  
+- `/bootstrap/` — EC2 user-data templates  
+- `/scripts/` — register/unregister app scripts (run via SSM)  
+- `/.github/workflows/deploy_ec2.yml` — GitHub Actions pipeline  
 
 
 
@@ -87,7 +87,7 @@ In your fork → **Settings → Secrets and Variables → Actions**:
 - Docker: non-root, read-only FS, dropped capabilities, resource limits
 
 ---
-## 💰 AWS Cost Estimate
+## AWS Cost Estimate
 
 Backenderer is designed to be **student & hobbyist friendly** — you can usually run it for free (first year) or very cheap after that.
 
@@ -98,7 +98,7 @@ Backenderer is designed to be **student & hobbyist friendly** — you can usuall
 - **SSM / CloudFormation** → FREE  
 - **Data transfer** → 1 GB/month outbound FREE  
 
-> ✅ If you’re in your AWS Free Tier period, you can run Backenderer 24/7 at **$0 cost**.
+> If you’re in your AWS Free Tier period, you can run Backenderer 24/7 at **$0 cost**.
 
 ---
 
