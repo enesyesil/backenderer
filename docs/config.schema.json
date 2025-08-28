@@ -1,0 +1,56 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Backenderer v1 Config",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "multi_app": { "type": "boolean", "default": false },
+      "mode": { "type": "string", "enum": ["source", "image"] },
+      "registry": { "type": "string", "enum": ["ecr", "ghcr"], "default": "ecr" },
+      "image_prefix": { "type": "string", "default": "" },
+      "tls_email": { "type": ["string", "null"], "format": "email" },
+  
+      "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+      "server_name": { "type": "string" },
+      "container_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+      "image_uri": { "type": "string" },
+  
+      "apps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "server_name", "container_port"],
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+            "server_name": { "type": "string" },
+            "container_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "image_uri": { "type": "string" }
+          }
+        }
+      }
+    },
+    "oneOf": [
+      { "properties": { "multi_app": { "const": true } }, "required": ["apps", "mode", "registry"] },
+      { "properties": { "multi_app": { "const": false } }, "required": ["name", "server_name", "container_port", "mode", "registry"] }
+    ],
+    "allOf": [
+      {
+        "if": { "properties": { "mode": { "const": "image" }, "multi_app": { "const": false } } },
+        "then": { "required": ["image_uri"] }
+      },
+      {
+        "if": { "properties": { "mode": { "const": "image" }, "multi_app": { "const": true } } },
+        "then": {
+          "properties": {
+            "apps": {
+              "items": {
+                "required": ["image_uri"]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+  

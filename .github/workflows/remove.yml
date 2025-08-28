@@ -1,0 +1,35 @@
+name: Remove App
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Terraform env"
+        type: choice
+        options: [dev, prod]
+        default: dev
+      app_name:
+        description: "App name to unregister"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+      - name: Unregister via SSM
+        run: |
+          IID=$(terraform -chdir=infra/terraform/envs/${{ inputs.env }} output -raw instance_id)
+          aws ssm send-command \
+            --targets "Key=instanceIds,Values=$IID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Unregister ${{ inputs.app_name }}" \
+            --parameters "commands=[\"/opt/backenderer/bin/unregister.sh ${{ inputs.app_name }}\"]"
