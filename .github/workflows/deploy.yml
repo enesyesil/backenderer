@@ -1,0 +1,217 @@
+name: Deploy App
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Terraform env (infra/terraform/envs/<env>)"
+        type: choice
+        options: [dev, prod]
+        default: dev
+      config_file:
+        description: "Path to Backenderer config (YAML, repo-relative)"
+        required: true
+        default: examples/single-app.yaml
+      only_apps:
+        description: "Comma-separated list of app names to deploy (optional)"
+        required: false
+        default: ""
+      aws_region:
+        description: "AWS region"
+        required: true
+        default: us-east-1
+      tf_version:
+        description: "Terraform version"
+        required: true
+        default: 1.13.0
+
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ENV_DIR: infra/terraform/envs/${{ inputs.env }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.tf_version }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Install yq + jsonschema
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          pip install jsonschema
+          yq --version
+
+      - name: Init Terraform
+        working-directory: ${{ env.ENV_DIR }}
+        run: terraform init -input=false
+
+      - name: Validate config against schema
+        run: |
+          CFG="${{ inputs.config_file }}"
+          yq -o=json '.' "$CFG" > cfg.json
+
+          cat > validate.py <<'EOF'
+                import json, sys
+                from jsonschema import Draft202012Validator
+
+                with open("cfg.json") as f:
+                    cfg = json.load(f)
+                with open("config/schema.json") as f:
+                    schema = json.load(f)
+
+                v = Draft202012Validator(schema)
+                errs = list(v.iter_errors(cfg))
+                if errs:
+                    for e in errs:
+                        path = ".".join(str(p) for p in e.path) or "<root>"
+                        print(f"[schema] {path}: {e.message}")
+                    sys.exit(1)
+                print("Schema validation OK")
+                EOF
+
+          python3 validate.py
+
+
+                - name: Normalize apps
+                    id: cfg
+                    run: |
+                MODE=$(jq -r '.mode' cfg.json)
+                REG=$(jq -r '.registry // "ecr"' cfg.json)
+                PREFIX=$(jq -r '.image_prefix // ""' cfg.json)
+                EMAIL=$(jq -r '.tls_email // ""' cfg.json)
+
+                if jq -e '.multi_app == true' cfg.json >/dev/null; then
+                    jq '.apps' cfg.json > apps.json
+                else
+                    NAME=$(jq -r '.name' cfg.json)
+                    SNAME=$(jq -r '.server_name' cfg.json)
+                    CPORT=$(jq -r '.container_port' cfg.json)
+                    IMG=$(jq -r '.image_uri // empty' cfg.json)
+                    jq -n --arg n "$NAME" --arg s "$SNAME" --argjson p "$CPORT" --arg img "$IMG" \
+                    '[{name:$n, server_name:$s, container_port:$p, image_uri:($img // null)}]' > apps.json
+                fi
+
+                echo "mode=$MODE" >> $GITHUB_OUTPUT
+                echo "registry=$REG" >> $GITHUB_OUTPUT
+                echo "image_prefix=$PREFIX" >> $GITHUB_OUTPUT
+                echo "tls_email=$EMAIL" >> $GITHUB_OUTPUT
+                echo "Normalized apps:"; cat apps.json
+
+      - name: Terraform outputs
+        id: tfout
+        run: |
+          terraform -chdir="${{ env.ENV_DIR }}" output -json > tfoutputs.json
+          echo "instance_id=$(jq -r '.instance_id.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
+          echo "public_ip=$(jq -r '.instance_public_ip.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
+          echo "ecr_repo=$(jq -r '.ecr_repo_url.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
+          echo "tls_mode=$(jq -r '.tls_mode.value // \"none\"' tfoutputs.json)" >> $GITHUB_OUTPUT
+          echo "alb_dns=$(jq -r '.alb_dns_name.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
+
+      - name: Login to ECR
+        if: ${{ steps.cfg.outputs.registry == 'ecr' }}
+        run: |
+          aws ecr get-login-password --region "${{ inputs.aws_region }}" \
+            | docker login --username AWS --password-stdin "${{ steps.tfout.outputs.ecr_repo }}"
+
+      - name: Login to GHCR
+        if: ${{ steps.cfg.outputs.registry == 'ghcr' }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build & push (mode=source)
+        if: steps.cfg.outputs.mode == 'source'
+        run: |
+          : > deploy_list.txt
+          while read -r row; do
+            NAME=$(jq -r '.name' <<<"$row")
+            CPORT=$(jq -r '.container_port' <<<"$row")
+            SNAME=$(jq -r '.server_name' <<<"$row")
+            if [ "${{ steps.cfg.outputs.registry }}" = "ecr" ]; then
+              IMG="${{ steps.tfout.outputs.ecr_repo }}:${NAME}"
+            else
+              OWNER="${{ github.repository_owner }}"
+              TAG="${GITHUB_SHA::7}"
+              IMG="ghcr.io/${OWNER}/${{ steps.cfg.outputs.image_prefix }}${NAME}:${TAG}"
+            fi
+            docker build -t "$IMG" ./app
+            docker push "$IMG"
+            echo "$NAME|$IMG|$CPORT|$SNAME" >> deploy_list.txt
+          done < <(jq -c '.[]' apps.json)
+
+      - name: Use image (mode=image)
+        if: steps.cfg.outputs.mode == 'image'
+        run: |
+          : > deploy_list.txt
+          while read -r row; do
+            NAME=$(jq -r '.name' <<<"$row")
+            IMG=$(jq -r '.image_uri // empty' <<<"$row")
+            CPORT=$(jq -r '.container_port' <<<"$row")
+            SNAME=$(jq -r '.server_name' <<<"$row")
+            echo "$NAME|$IMG|$CPORT|$SNAME" >> deploy_list.txt
+          done < <(jq -c '.[]' apps.json)
+
+      - name: Filter apps (partial)
+        if: ${{ inputs.only_apps != '' }}
+        run: |
+          IFS=',' read -ra ONLY <<< "${{ inputs.only_apps }}"
+          awk -F'|' -v list="${ONLY[*]}" '
+            BEGIN{ split(list, a, " "); for(i in a){ sel[a[i]]=1 } }
+            { split($0, f, "|"); if (sel[f[1]]) print $0 }
+          ' deploy_list.txt > tmp && mv tmp deploy_list.txt
+          cat deploy_list.txt
+
+      - name: Register apps
+        run: |
+          IID="${{ steps.tfout.outputs.instance_id }}"
+          while IFS='|' read -r NAME IMG PORT SNAME; do
+            aws ssm send-command \
+              --targets "Key=instanceIds,Values=$IID" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Register $NAME" \
+              --parameters "commands=[\"/opt/backenderer/bin/register.sh $NAME $IMG $PORT $SNAME\"]"
+          done < deploy_list.txt
+
+      - name: Health check
+        run: |
+          TLS="${{ steps.tfout.outputs.tls_mode }}"
+          SCHEME="http"
+          if [ "$TLS" = "letsencrypt" ] || [ "$TLS" = "alb_acm" ]; then SCHEME="https"; fi
+          while IFS='|' read -r NAME IMG PORT SNAME; do
+            URL="${SCHEME}://${SNAME}/backenderer/health"
+            curl -fsSL --max-time 15 "$URL" || echo "::warning::Health check failed: $NAME"
+          done < deploy_list.txt
+
+      - name: Run certbot if tls=letsencrypt
+        if: ${{ steps.tfout.outputs.tls_mode == 'letsencrypt' }}
+        run: |
+          IID="${{ steps.tfout.outputs.instance_id }}"
+          EMAIL="${{ steps.cfg.outputs.tls_email }}"
+          DOMAINS=$(awk -F'|' '{print $4}' deploy_list.txt | tr '\n' ' ')
+          aws ssm send-command \
+            --targets "Key=instanceIds,Values=$IID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Certbot LE" \
+            --parameters "commands=[\"dnf install -y certbot python3-certbot-nginx\",\"certbot --nginx -d ${DOMAINS} -m ${EMAIL:-admin@example.com} --agree-tos --redirect --non-interactive\"]"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Backenderer Deploy" >> $GITHUB_STEP_SUMMARY
+          awk -F'|' '{printf "- **%s** → `%s` (server_name: %s)\n",$1,$2,$4}' deploy_list.txt >> $GITHUB_STEP_SUMMARY || true

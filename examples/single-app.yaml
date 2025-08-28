@@ -1,0 +1,12 @@
+# Single app, build from source, push to ECR
+multi_app: false
+mode: source            # source | image
+registry: ecr           # ecr | ghcr
+image_prefix: ""        # only used for ghcr
+tls_email: you@example.com   # used when tls=letsencrypt on the infra side
+
+# single-app fields
+name: hello-web
+server_name: hello.yourdomain.com
+container_port: 8080
+# image_uri: ghcr.io/you/hello-web:1.0   # required if mode=image
