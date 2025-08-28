@@ -30,7 +30,7 @@ Fork this repo, add your app (or reference an existing Docker image), connect yo
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 ### 1. Bootstrap Infra
 Run Terraform to set up IAM role, EC2 instance, and (optionally) ECR.
