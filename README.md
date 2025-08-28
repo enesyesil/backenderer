@@ -1,145 +1,148 @@
+# Backenderer 🚀
 
-
-
-# Backenderer
-![Project Status: Planning](https://img.shields.io/badge/status-planning-yellow)
-
-**Backenderer** is a lightweight, secure, and decentralized backend deploy kit for students and hobbyists.  
-Deploy your backend app to your own AWS account in **seconds** — no servers to manage, no SSH needed.
-
----
+**Backenderer** is a lightweight, plug-and-play deployment system for backend apps.  
+Fork this repo, add your app (or reference an existing Docker image), connect your AWS account, and deploy in minutes.
 
 ##  Features
-- **Two Deployment Modes**
-  1. **Source Build** → Put your code + `Dockerfile` in `/app` (must listen on port `8080` inside container).
-  2. **Image Deploy** → Put your Docker image URI in `/image/ref.txt` (e.g., `ghcr.io/username/project:tag`).
-- **Secure by Default**
-  - No SSH, SSM-only
-  - Hardened Docker & Nginx configs
-  - TLS 1.2/1.3 + HSTS + rate limits
-- **AWS Native**
-  - OIDC-based deploy from GitHub Actions
-  - Push images to Amazon ECR
-  - Run on Amazon Linux EC2 (t3.micro by default)
+
+- **Stateless template** → no state committed; safe to fork and reuse.  
+- **Terraform-based infra** → EC2 + Docker + Nginx reverse proxy.  
+- **Secure by default** → OIDC role for GitHub Actions, no SSH access (managed via SSM).  
+- **Config-driven deploys** → describe apps in YAML (`examples/*.yaml`).  
+- **Multi-app hosting** → register/unregister apps dynamically, Nginx handles routing.  
+- **TLS/DNS options** → `none`, `letsencrypt`, or `alb_acm`.  
+- **Extendable** → future support for other clouds/providers.
+
 
 ---
 
-## Repo Structure
 
-- `/app` — Option A: Put your source code + Dockerfile here  
-- `/image/ref.txt` — Option B: Put your existing Docker image URI here  
-- `/aws/role.yaml` — AWS OIDC deploy role (CloudFormation)  
-- `/aws/instance.cfn.yaml` — EC2 + SG + IAM + optional Route53 stack  
-- `/bootstrap/` — EC2 user-data templates  
+##  Repo Structure
+
+- `/app/` — Option A: put your app source + Dockerfile here  
+- `/image/ref.txt` — Option B: reference an existing Docker image  
+- `/examples/` — Sample deploy configs (single-app, multi-app)  
+- `/infra/terraform/` — Infra code (dev & prod envs)  
+- `/infra/docs/` — Extra docs (state, config schema, etc.)  
 - `/scripts/` — register/unregister app scripts (run via SSM)  
-- `/.github/workflows/deploy_ec2.yml` — GitHub Actions pipeline  
-
-
-
----
-
-##  Quick Start
-
-### 1. Fork this repo
-
-### 2. Choose a deployment mode
-
-#### Option A – Build from Source
-1. Add your app code and `Dockerfile` under `/app/`.
-2. Ensure your app listens on **port 8080** inside the container.
-
-#### Option B – Deploy Existing Image
-1. Put your image URI in `/image/ref.txt`:
-
+- `/.github/workflows/` — CI workflows (infra, deploy, remove)
 
 
 ---
 
-### 3. Set up AWS OIDC Role
+## 🚀 Quickstart
 
-1. In AWS Console → **CloudFormation** → create stack with `/aws/role.yaml`.
-2. Copy the output **DeployRoleArn**.
+### 1. Bootstrap Infra
+Run Terraform to set up IAM role, EC2 instance, and (optionally) ECR.
 
----
+```bash
+cd infra/terraform/envs/dev
+cp dev.tfvars.example dev.tfvars
+# edit dev.tfvars with your values (AMI, instance_type, etc.)
+terraform init
+terraform apply -var-file=dev.tfvars
+```
+Terraform will output:
 
-### 4. Add GitHub Actions Secrets
-
-In your fork → **Settings → Secrets and Variables → Actions**:
-- `AWS_ROLE_ARN` → The DeployRoleArn from step 3
-- `AWS_REGION` → e.g., `us-east-1`
-- *(Optional)* `DOMAIN_NAME` and `HOSTED_ZONE_ID` for HTTPS on a custom domain.
-
----
-
-### 5. Deploy 
-
-1. Go to your fork → **Actions** → **Deploy to AWS (EC2)** → **Run workflow**.
-2. Wait for completion.
-3. Get your app URL from workflow output
+- `role_arn` → for GitHub OIDC
+- `instance_id`, `instance_public_ip`
+- `ecr_repo_url` (if `create_ecr = true`)
+- `alb_dns_name` (if using ALB/TLS)
 
 ---
 
-##  Security Defaults
-- No SSH (SSM only)
-- IMDSv2 enforced
-- Least privilege IAM
-- Hardened Nginx (TLS 1.2/1.3, HSTS, CSP)
-- Docker: non-root, read-only FS, dropped capabilities, resource limits
+### 2. Configure GitHub Actions
 
+In your fork, go to **Settings → Secrets and variables → Actions** and add:
+
+- `AWS_ROLE_ARN` → value = `role_arn` from Terraform
+- `AWS_REGION` → your region (e.g., `us-east-1`)
+
+**Optional (for remote state):**
+- `TFSTATE_BUCKET`
+- `TF_LOCK_TABLE`
+
+### 3. Deploy Your App
+
+Commit a config file (example below) and trigger the **Deploy App** workflow:
+
+```yaml
+# examples/single-app.yaml
+env: dev
+apps:
+  - name: myapp
+    image: ghcr.io/<user>/<repo>:latest
+    host: myapp.localtest.me
+    port: 8080
+```
+
+Workflow will:
+
+- Build or pull your Docker image  
+- Push to ECR or GHCR  
+- Register the app via SSM on your EC2 host  
+- Update Nginx and reload  
+
+Check health:
+
+```bash
+curl http://<server-ip>/backenderer/health
+```
 ---
-## AWS Cost Estimate
+##  Environments
 
-Backenderer is designed to be **student & hobbyist friendly** — you can usually run it for free (first year) or very cheap after that.
+- **`dev/`** → defaults for testing (uses local state).  
+- **`prod/`** → production defaults (can use remote state with S3 + DynamoDB).  
 
-### Free Tier (First 12 months)
-- **EC2 t3.micro** (750 hrs/month) → FREE  
-- **EBS Storage (8–10 GB)** → FREE  
-- **ECR (500 MB storage)** → FREE  
-- **SSM / CloudFormation** → FREE  
-- **Data transfer** → 1 GB/month outbound FREE  
-
-> If you’re in your AWS Free Tier period, you can run Backenderer 24/7 at **$0 cost**.
-
----
-
-### After Free Tier
-Typical monthly costs (for one always-on instance):
-
-| Service          | Cost Estimate |
-|------------------|---------------|
-| EC2 t3.micro     | $7–8 / month |
-| EBS (10 GB)      | ~$1 / month |
-| ECR (small usage)| $0–1 / month |
-| Data transfer    | ~$1–2 / month (light traffic) |
-| **Total**        | **$10–12 / month** |
-
----
-
-### Optional Domain (Route53 + TLS)
-- Domain name: ~$12/year  
-- Hosted zone: $0.50/month  
-- DNS queries: negligible  
-- Certificates: FREE (Let’s Encrypt via certbot)  
-
-> With a domain: expect **+$1/month** plus domain registration cost.
-
----
-
-**Summary:**  
-- Free in Year 1 (if you use AWS Free Tier).  
-- After Free Tier: **~$10–15/month** steady state.  
+See [`infra/docs/state.md`](infra/docs/state.md) for details on enabling remote state.
 
 ---
 
+## Security
 
-
-##  Extending
-Future versions will add:
-- GCP & Azure support
-- Custom container ports
-- Automatic CloudWatch logging & alarms
-- Per-app Basic Auth
+- No SSH access; all operations use AWS Systems Manager (SSM).
+- GitHub Actions authenticates via OIDC to assume an IAM role (no long-lived keys).
+- TLS options: `none`, `letsencrypt`, or `alb_acm` (configure in Terraform).
+- Principle of least privilege: limit the OIDC role to required services (EC2, SSM, ECR, S3/DynamoDB if using remote state).
 
 ---
 
-**Backenderer** – Deploy your backend, anywhere, in seconds.
+## Workflows
+
+- **Infra** → plans and applies Terraform (`infra.yml`).  
+- **Deploy App** → builds/pushes app image, registers via SSM (`deploy.yml`).  
+- **Remove Stack** → terminates instance or destroys stack (`remove.yml`).  
+
+---
+
+## Docs
+
+- [`CONFIG.md`](infra/docs/CONFIG.md) → app configuration schema  
+- [`state.md`](infra/docs/state.md) → local vs remote state guide  
+- [`quickstart.md`](infra/docs/quickstart.md) → step-by-step walkthrough  
+- [`cost.md`](infra/docs/cost.md) → estimated AWS costs and budgeting notes  
+
+
+---
+
+
+## Roadmap
+
+- Multi-cloud provider support  
+- Auto-scaling groups / spot instances  
+- Metrics & monitoring integration  
+- Terraform modules for VPC, RDS, etc.  
+
+---
+
+## Contributing
+
+Fork this repo, use it for your own apps, and feel free to open pull requests with improvements.  
+Issues and feature requests are welcome to help make Backenderer more useful for everyone.  
+
+## License
+
+This project is licensed under the MIT License.  
+See the [LICENSE](LICENSE) file for details.  
+
+

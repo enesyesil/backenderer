@@ -1,85 +1,67 @@
-cat > ../../modules/compute_vm_docker_nginx/user_data.tpl <<'TPL'
-#!/bin/bash
-set -euxo pipefail
+#!/bin/bash -euxo pipefail
 
-dnf update -y
-amazon-linux-extras enable nginx1
-dnf install -y docker nginx unzip curl jq
-systemctl enable --now docker
-systemctl enable --now nginx
-systemctl enable --now amazon-ssm-agent || true
-
-mkdir -p /opt/backenderer/{conf,bin}
-mkdir -p /etc/nginx/conf.d
-echo '{}' > /opt/backenderer/apps.json
-
-cat >/opt/backenderer/bin/register.sh <<'REG'
-#!/usr/bin/env bash
-# Usage: register.sh <name> <image> <container_port> <server_name>
-set -euo pipefail
-NAME="$1"; IMAGE="$2"; CPORT="$3"; SNAME="$4"
-BASE=/opt/backenderer
-IDX="$BASE/apps.json"
-PORT_BASE=18000
-jq . "$IDX" >/dev/null 2>&1 || echo '{}' > "$IDX"
-
-# reuse or allocate host port
-HOST_PORT=$(jq -r --arg n "$NAME" 'if has($n) then .[$n].host_port else null end' "$IDX")
-if [[ "$HOST_PORT" == "null" || -z "$HOST_PORT" ]]; then
-  HOST_PORT=$PORT_BASE
-  while ss -ltn | awk '{print $4}' | grep -q ":$HOST_PORT$"; do HOST_PORT=$((HOST_PORT+1)); done
+# -------- Base packages / Docker / Nginx --------
+if command -v dnf >/dev/null 2>&1; then
+  PKG_MGR=dnf
+  sudo dnf -y update
+  sudo dnf -y install docker nginx
+elif command -v yum >/dev/null 2>&1; then
+  PKG_MGR=yum
+  sudo yum -y update
+  sudo yum -y install docker nginx
+elif command -v apt-get >/dev/null 2>&1; then
+  PKG_MGR=apt
+  sudo apt-get update -y
+  sudo apt-get install -y docker.io nginx
+else
+  echo "Unsupported OS: no dnf/yum/apt-get"; exit 1
 fi
 
-docker pull "$IMAGE"
-if docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then docker rm -f "$NAME" || true; fi
-docker run -d --restart unless-stopped --name "$NAME" -p "$HOST_PORT:$CPORT" "$IMAGE"
+# Enable + start services
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user || true  # ubuntu images may use 'ubuntu' user; harmless if ec2-user absent
+id -nG | grep -q docker || true
 
-CONF="/etc/nginx/conf.d/$${NAME}.conf"
-cat >"$CONF" <<CONF
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+# -------- Backenderer FS layout --------
+sudo mkdir -p /opt/backenderer/{apps,bin,state,nginx/sites-available,nginx/sites-enabled}
+sudo chmod -R 755 /opt/backenderer
+
+# Ensure Nginx loads our per-app vhosts
+sudo tee /etc/nginx/conf.d/backenderer.conf >/dev/null <<'NGX'
+# Include per-app virtual hosts
+include /opt/backenderer/nginx/sites-enabled/*.conf;
+
+# Simple built-in health endpoint so CI can verify host is up
 server {
-  listen 80;
-  server_name $${SNAME};
-  client_max_body_size 25m;
-
-  add_header X-Frame-Options DENY;
-  add_header X-Content-Type-Options nosniff;
-  add_header Referrer-Policy strict-origin-when-cross-origin;
-
-  location / {
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-    proxy_pass http://127.0.0.1:$${HOST_PORT};
-  }
+    listen 80 default_server;
+    server_name _;
+    location /backenderer/health {
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
 }
-CONF
+NGX
 
-nginx -t && systemctl reload nginx || { docker rm -f "$NAME" || true; rm -f "$CONF"; exit 1; }
+# Harden nginx a touch (no server_tokens)
+if ! grep -q "^server_tokens off;" /etc/nginx/nginx.conf; then
+  sudo sed -i 's|http { |http {\n    server_tokens off;\n|' /etc/nginx/nginx.conf || true
+fi
 
-TMP=$(mktemp)
-jq --arg n "$NAME" --arg img "$IMAGE" --arg s "$SNAME" --argjson hp "$HOST_PORT" \
-  '.[$n] = {image: $img, server_name: $s, host_port: $hp}' "$IDX" > "$TMP" && mv "$TMP" "$IDX"
-echo "Registered $NAME -> $${SNAME} (127.0.0.1:$${HOST_PORT})"
-REG
-chmod +x /opt/backenderer/bin/register.sh
+sudo nginx -t
+sudo systemctl reload nginx
 
-cat >/opt/backenderer/bin/unregister.sh <<'UNREG'
-#!/usr/bin/env bash
-# Usage: unregister.sh <name>
-set -euo pipefail
-NAME="$1"
-BASE=/opt/backenderer
-IDX="$BASE/apps.json"
+# -------- SSM Agent (usually preinstalled on Amazon Linux 2023) --------
+if ! systemctl is-enabled amazon-ssm-agent >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    sudo systemctl enable --now amazon-ssm-agent || true
+  elif command -v snap >/dev/null 2>&1; then
+    sudo snap install amazon-ssm-agent --classic || true
+    sudo systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true
+  fi
+fi
 
-if docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then docker rm -f "$NAME" || true; fi
-CONF="/etc/nginx/conf.d/$${NAME}.conf"
-if [[ -f "$CONF" ]]; then rm -f "$CONF"; fi
-nginx -t && systemctl reload nginx || true
-
-jq "del(.\"$NAME\")" "$IDX" > "$IDX.tmp" 2>/dev/null || echo '{}' > "$IDX.tmp"
-mv "$IDX.tmp" "$IDX"
-echo "Unregistered $NAME"
-UNREG
-chmod +x /opt/backenderer/bin/unregister.sh
-TPL
+echo "Bootstrap complete."

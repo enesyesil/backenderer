@@ -1,0 +1,37 @@
+# ==== Repo & CI ====
+github_org        = "your-org-or-user"
+github_repo       = "your-repo-name"
+github_branch     = "main"
+env               = "dev"
+
+# ==== Compute ====
+# Pick an AL2023 AMI for your region: e.g., ami-0c02fb55956c7d316 in us-east-1 (example only!)
+ami_id            = "ami-xxxxxxxxxxxxxxxxx"
+instance_type     = "t3.micro"
+
+# If your module expects an instance profile name/arn for SSM/ECR, set it here:
+# instance_profile  = "backenderer-ec2-profile"
+
+# ==== Container Registry ====
+create_ecr        = true
+ecr_repo_name     = "backenderer-apps"
+
+# ==== DNS / TLS ====
+# tls_mode can be: "none", "letsencrypt", or "alb_acm" per your module docs
+tls_mode          = "none"
+# route53_zone_id required if tls_mode implies DNS records
+# route53_zone_id   = "Zxxxxxxxxxxxxxxx"
+
+# ==== App hostnames (if your module supports) ====
+# base_domain        = "apps.example.com"
+
+# Copy to backend.tf and edit values if you want remote state.
+terraform {
+  backend "s3" {
+    bucket         = "YOUR_BUCKET_NAME"
+    key            = "backenderer/prod/terraform.tfstate"
+    region         = "YOUR_REGION"
+    dynamodb_table = "YOUR_DDB_LOCK_TABLE"
+    encrypt        = true
+  }
+}

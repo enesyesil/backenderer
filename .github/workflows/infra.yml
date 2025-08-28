@@ -57,11 +57,12 @@ jobs:
         with:
           terraform_version: ${{ inputs.tf_version }}
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ inputs.aws_region }}
+            role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+            aws-region: ${{ secrets.AWS_REGION }}
+  
 
       - name: Preflight — AWS identity
         run: aws sts get-caller-identity

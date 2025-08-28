@@ -1,35 +1,54 @@
-name: Remove App
+name: Remove Stack
 
 on:
   workflow_dispatch:
     inputs:
       env:
-        description: "Terraform env"
-        type: choice
-        options: [dev, prod]
-        default: dev
-      app_name:
-        description: "App name to unregister"
+        description: "Environment folder under infra/terraform/envs (e.g., dev)"
         required: true
-
-permissions:
-  id-token: write
-  contents: read
+        type: string
+      aws_region:
+        description: "AWS region (falls back to AWS_REGION secret if empty)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   remove:
     runs-on: ubuntu-latest
+    env:
+      EFFECTIVE_AWS_REGION: ${{ inputs.aws_region != '' && inputs.aws_region || secrets.AWS_REGION }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
-          aws-region: us-east-1
-      - name: Unregister via SSM
+          terraform_version: 1.8.5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.EFFECTIVE_AWS_REGION }}
+
+      - name: Terraform init (read outputs)
+        run: terraform -chdir=infra/terraform/envs/${{ inputs.env }} init -input=false
+
+      - name: Read instance id from outputs
+        id: tf_out
         run: |
-          IID=$(terraform -chdir=infra/terraform/envs/${{ inputs.env }} output -raw instance_id)
-          aws ssm send-command \
-            --targets "Key=instanceIds,Values=$IID" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Unregister ${{ inputs.app_name }}" \
-            --parameters "commands=[\"/opt/backenderer/bin/unregister.sh ${{ inputs.app_name }}\"]"
+          IID="$(terraform -chdir=infra/terraform/envs/${{ inputs.env }} output -raw instance_id || true)"
+          echo "instance_id=$IID" >> "$GITHUB_OUTPUT"
+
+      - name: Terminate EC2 (if found)
+        if: steps.tf_out.outputs.instance_id != ''
+        run: |
+          aws ec2 terminate-instances --instance-ids "${{ steps.tf_out.outputs.instance_id }}"
+          aws ec2 wait instance-terminated --instance-ids "${{ steps.tf_out.outputs.instance_id }}"
+          echo "Terminated instance ${{ steps.tf_out.outputs.instance_id }}"
+
+      # Optional: Terraform destroy whole stack (uncomment when ready)
+      # - name: Terraform destroy
+      #   run: terraform -chdir=infra/terraform/envs/${{ inputs.env }} destroy -auto-approve
