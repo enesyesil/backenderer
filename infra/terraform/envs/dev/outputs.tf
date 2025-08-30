@@ -28,3 +28,7 @@ output "acm_certificate_arn" {
   value       = module.dns_tls.acm_certificate_arn
   description = "Only when tls_mode = alb_acm"
 }
+
+output "instance_profile_name" {
+  value = module.iam_ec2_instance_profile.instance_profile_name
+}

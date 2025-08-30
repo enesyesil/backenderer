@@ -39,10 +39,12 @@ variable "instance_type" {
   default     = "t3.micro"
 }
 
-variable "instance_profile" {
-  description = "IAM instance profile for EC2"
+variable "name_prefix" {
+  description = "Prefix for naming AWS resources (e.g., repo or project name)"
   type        = string
+  default     = "backenderer"
 }
+
 
 # ECR module inputs
 variable "create_ecr" {

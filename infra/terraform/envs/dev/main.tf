@@ -53,9 +53,11 @@ module "compute" {
   instance_type        = var.instance_type
   subnet_id            = module.network.subnet_id
   security_group_ids   = []
-  iam_instance_profile = var.instance_profile
+  iam_instance_profile = module.iam_ec2_instance_profile.instance_profile_name
   env                  = var.env
 }
+
+
 
 
 # TLS / DNS (Let’s Encrypt or ACM/ALB)
@@ -64,4 +66,10 @@ module "dns_tls" {
   env      = var.env
   tls_mode = var.tls_mode
   zone_id  = var.route53_zone_id
+}
+
+module "iam_ec2_instance_profile" {
+  source      = "../../modules/iam_ec2_instance_profile"
+  name_prefix = "${var.env}-${var.name_prefix}" # or just var.name_prefix if you prefer
+  tags        = var.tags
 }

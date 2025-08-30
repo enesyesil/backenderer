@@ -10,7 +10,7 @@ ami_id            = "ami-xxxxxxxxxxxxxxxxx"
 instance_type     = "t3.micro"
 
 # If your module expects an instance profile name/arn for SSM/ECR, set it here:
-# instance_profile  = "backenderer-ec2-profile"
+name_prefix = "backenderer"   # or any short project slug
 
 # ==== Container Registry ====
 create_ecr        = true
