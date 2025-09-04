@@ -1,171 +1,69 @@
-name: Infra
+name: Infra             
 
-on:
-  workflow_dispatch:
-    inputs:
+on:                     
+  workflow_dispatch:    
+    inputs:             
       env:
-        description: "Terraform env folder (infra/terraform/envs/<env>)"
+        description: Which environment to target (dev/prod)
         type: choice
         required: true
         options: [dev, prod]
-        default: dev
       action:
-        description: "Terraform action"
+        description: What Terraform action to run
         type: choice
         required: true
         options: [plan, apply, destroy]
-        default: plan
-      aws_region:
-        description: "AWS region"
-        type: string
-        required: true
-        default: us-east-1
-      tf_version:
-        description: "Terraform version"
-        type: string
-        required: true
-        default: 1.13.0
 
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  TF_IN_AUTOMATION: "true"
+permissions:            # Fine-grained token permissions for this workflow
+  id-token: write       
+  contents: read        
+  packages: read        
 
 jobs:
-  terraform:
-    runs-on: ubuntu-latest
-    outputs:
-      role_arn: ${{ steps.capture.outputs.role_arn }}
-      instance_public_ip: ${{ steps.capture.outputs.instance_public_ip }}
-      instance_id: ${{ steps.capture.outputs.instance_id }}
-      ecr_repo_url: ${{ steps.capture.outputs.ecr_repo_url }}
-      tls_mode: ${{ steps.capture.outputs.tls_mode }}
-      alb_dns_name: ${{ steps.capture.outputs.alb_dns_name }}
-      acm_certificate_arn: ${{ steps.capture.outputs.acm_certificate_arn }}
-    defaults:
-      run:
-        working-directory: infra/terraform/envs/${{ inputs.env }}
+  terraform:           
+    runs-on: ubuntu-latest     
+
+    env:                
+      TF_DIR: infra/terraform/envs/${{ inputs.env }}  
+      AWS_REGION: ${{ secrets.AWS_REGION }}          
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4   # Pulls our repo code into the runner
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ inputs.tf_version }}
-
-      - name: Configure AWS credentials
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-            role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-            aws-region: ${{ secrets.AWS_REGION }}
-  
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}  
+          aws-region: ${{ env.AWS_REGION }}                  # Region for API calls
 
-      - name: Preflight — AWS identity
-        run: aws sts get-caller-identity
-
-      - name: Cache Terraform providers & modules
-        uses: actions/cache@v4
+      - name: Setup Terraform CLI
+        uses: hashicorp/setup-terraform@v3    # Installs Terraform on runner
         with:
-          path: |
-            infra/terraform/envs/${{ inputs.env }}/.terraform
-            infra/terraform/envs/${{ inputs.env }}/.terraform.lock.hcl
-          key: tf-${{ runner.os }}-${{ inputs.env }}-${{ hashFiles('infra/terraform/envs/**.tf','infra/terraform/modules/**.tf') }}
+          terraform_version: 1.13.0           
 
-      - name: Init
-        run: terraform init -input=false
-
-      - name: Validate
-        run: terraform validate
-
-      - name: Plan
-        if: ${{ inputs.action == 'plan' }}
-        run: terraform plan -input=false -out=tfplan
-
-      - name: Upload plan artifact
-        if: ${{ inputs.action == 'plan' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan-${{ inputs.env }}
-          path: infra/terraform/envs/${{ inputs.env }}/tfplan
-
-      - name: Apply
-        if: ${{ inputs.action == 'apply' }}
-        run: terraform apply -input=false -auto-approve
-
-      - name: Destroy
-        if: ${{ inputs.action == 'destroy' }}
-        run: terraform destroy -input=false -auto-approve
-
-      - name: Capture outputs (JSON + set as job outputs)
-        id: capture
+      - name: Terraform Init (S3 per-env)
+        shell: bash
         run: |
-          terraform output -json | tee tfoutputs.json
-          echo "role_arn=$(jq -r '.role_arn.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "instance_public_ip=$(jq -r '.instance_public_ip.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "instance_id=$(jq -r '.instance_id.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "ecr_repo_url=$(jq -r '.ecr_repo_url.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "tls_mode=$(jq -r '.tls_mode.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "alb_dns_name=$(jq -r '.alb_dns_name.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
-          echo "acm_certificate_arn=$(jq -r '.acm_certificate_arn.value // empty' tfoutputs.json)" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          # Initialize backend pointing to S3; key splits state by env (dev/prod)
+          terraform -chdir="$TF_DIR" init \
+            -backend-config="bucket=${{ secrets.TFSTATE_BUCKET }}" \
+            -backend-config="key=backenderer/${{ inputs.env }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="encrypt=true"
 
-      - name: Save outputs artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfoutputs-${{ inputs.env }}
-          path: infra/terraform/envs/${{ inputs.env }}/tfoutputs.json
+      - name: Terraform Validate
+        run: terraform -chdir="$TF_DIR" validate   # Sanity-check 
 
-      # --- Post-apply preflight checks ---
-      - name: Preflight — SSM online check (best effort)
-        if: ${{ inputs.action != 'plan' }}
-        env:
-          INSTANCE_ID: ${{ steps.capture.outputs.instance_id }}
-        run: |
-          if [ -z "$INSTANCE_ID" ]; then
-            echo "No instance_id output; skipping SSM check."
-            exit 0
-          fi
-          echo "Checking SSM for $INSTANCE_ID ..."
-          # Returns "Online" if the agent is registered and reachable
-          STATUS=$(aws ssm describe-instance-information \
-            --query "InstanceInformationList[?InstanceId=='$INSTANCE_ID'].PingStatus" \
-            --output text || true)
-          echo "SSM PingStatus: ${STATUS:-<none>}"
-          # Non-blocking: do not fail if offline yet; user-data/agent might still be starting.
+      - name: Terraform Plan
+        if: inputs.action == 'plan'
+        run: terraform -chdir="$TF_DIR" plan -input=false   # Show what would change??
 
-      - name: Job summary
-        if: ${{ always() }}
-        env:
-          ACTION: ${{ inputs.action }}
-          ENVNAME: ${{ inputs.env }}
-          ROLE_ARN: ${{ steps.capture.outputs.role_arn }}
-          IP: ${{ steps.capture.outputs.instance_public_ip }}
-          IID: ${{ steps.capture.outputs.instance_id }}
-          ECR: ${{ steps.capture.outputs.ecr_repo_url }}
-          TLS_MODE: ${{ steps.capture.outputs.tls_mode }}
-          ALB_DNS: ${{ steps.capture.outputs.alb_dns_name }}
-          ACM_ARN: ${{ steps.capture.outputs.acm_certificate_arn }}
-        run: |
-          {
-            echo "## Backenderer Infra — $ACTION"
-            echo ""
-            echo "**Env:** \`$ENVNAME\`  •  **Region:** \`${{ inputs.aws_region }}\`"
-            echo ""
-            echo "### Key Outputs"
-            echo "- Role ARN: \`${ROLE_ARN:-<none>}\`"
-            echo "- Instance ID: \`${IID:-<none>}\`"
-            echo "- Public IP: \`${IP:-<none>}\`"
-            echo "- ECR Repo URL: \`${ECR:-<none>}\`"
-            echo "- TLS Mode: \`${TLS_MODE:-<none>}\`"
-            if [ -n "$ALB_DNS" ]; then
-              echo "- ALB DNS: \`${ALB_DNS}\`"
-            fi
-            if [ -n "$ACM_ARN" ]; then
-              echo "- ACM Cert ARN: \`${ACM_ARN}\`"
-            fi
-            echo ""
-            echo "> Tip: Download the **tfoutputs-${ENVNAME}** artifact for machine-readable outputs."
-          } >> $GITHUB_STEP_SUMMARY
+      - name: Terraform Apply
+        if: inputs.action == 'apply'
+        run: terraform -chdir="$TF_DIR" apply -auto-approve -input=false  # Make some changes
+
+      - name: Terraform Destroy
+        if: inputs.action == 'destroy'
+        run: terraform -chdir="$TF_DIR" destroy -auto-approve -input=false  # Tear it down baby!
