@@ -8,8 +8,10 @@ terraform {
     }
   }
 
-  backend "local" {
-    path = "terraform.tfstate"
+ backend "s3" {
+    bucket = "YOUR-BACKENDERER-STATE"
+    key    = "envs/dev/terraform.tfstate"   
+    region = "us-east-1"
   }
 }
 

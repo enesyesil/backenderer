@@ -12,10 +12,13 @@ terraform {
     }
   }
 
-  # Keep local state here (adjust to remote backend later if you want)
-  backend "local" {
-    path = "terraform.tfstate"
+  
+  backend "s3" {
+    bucket = "YOUR-BACKENDERER-STATE"
+    key    = "envs/dev/terraform.tfstate"   
+    region = "us-east-1"
   }
+
 }
 
 provider "aws" {
