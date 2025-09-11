@@ -1,127 +1,88 @@
-name: Deploy App                       
-
+name: Deploy App
 on:
-  workflow_dispatch:                   
+  workflow_dispatch:
     inputs:
       env:
-        description: Target environment (dev/prod)
         type: choice
-        required: true
         options: [dev, prod]
+        default: dev
       config_file:
-        description: Path to app config (e.g., examples/single-app.yaml)
-        required: true
-        default: examples/single-app.yaml
-      tls_mode:
-        description: TLS mode
-        type: choice
-        required: true
-        options: [none, letsencrypt, alb]
+        type: string
+        default: "examples/single-app.yaml"
+      tf_version:
+        type: string
+        default: "1.6.6"
 
 permissions:
-  id-token: write                      
-  contents: read                       
-  packages: write                      
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
-    env:
-      TF_DIR: infra/terraform/envs/${{ inputs.env }}      
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      # (Optional) ECR fallback if you use ECR instead of GHCR:
-      # ECR_REPO: ${{ secrets.ECR_REPO }}
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4                        
+        uses: actions/checkout@v4
 
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4   # Assume role into AWS
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_REGION }}
+      - name: Read deploy config
+        id: cfg
+        run: |
+          python3 -m pip install --user yq >/dev/null 2>&1 || true
+          PATH="$HOME/.local/bin:$PATH"
+          echo "name=$(yq -r '.name // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          echo "server_name=$(yq -r '.server_name // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          echo "container_port=$(yq -r '.container_port // 8080' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          echo "image_uri=$(yq -r '.image_uri // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          echo "mode=$(yq -r '.mode // \"source\"' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          echo "registry=$(yq -r '.registry // \"ecr\"' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
 
-      - name: Setup Terraform CLI
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.13.0
+          terraform_version: ${{ inputs.tf_version }}
 
-      - name: Terraform Init (read correct env state)
-        run: |
-          set -euo pipefail
-          terraform -chdir="$TF_DIR" init \
-            -backend-config="bucket=${{ secrets.TFSTATE_BUCKET }}" \
-            -backend-config="key=backenderer/${{ inputs.env }}/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="encrypt=true"
-       
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Read Terraform outputs
+      - name: Fetch Terraform outputs (instance & ECR)
         id: tfout
         run: |
-          terraform -chdir="$TF_DIR" output -json > tfout.json
-          echo "instance_id=$(jq -r .instance_id.value tfout.json)" >> $GITHUB_OUTPUT
-          echo "instance_public_ip=$(jq -r .instance_public_ip.value tfout.json)" >> $GITHUB_OUTPUT
-          # Add more outputs as needed (e.g., alb_dns_name)
+          cd infra/terraform/envs/${{ inputs.env }}
+          terraform init -upgrade
+          terraform output -json > /tmp/outs.json
+          echo "instance_id=$(jq -r '.instance_id.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
+          echo "public_ip=$(jq -r '.public_ip.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
+          echo "ecr_repo_url=$(jq -r '.ecr_repo_url.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
 
-      - name: Validate app config against schema
+      - name: Build & push image (source mode)
+        if: steps.cfg.outputs.mode == 'source'
         run: |
-          # Uses your JSON schema to validate YAML/JSON config
-          pipx install check-jsonschema
-          check-jsonschema --schemafile docs/config.schema.json ${{ inputs.config_file }}
+          ECR="${{ steps.tfout.outputs.ecr_repo_url }}"
+          APP="${{ steps.cfg.outputs.name }}"
+          [[ -n "$ECR" && -n "$APP" ]] || { echo "Missing ECR or app name"; exit 1; }
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$(echo "$ECR" | cut -d/ -f1)"
+          docker build -t "$ECR:$APP" ./app
+          docker push "$ECR:$APP"
+          echo "image=$ECR:$APP" >> $GITHUB_OUTPUT
 
-      - name: Login to GHCR
-        if: ${{ !cancelled() }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-        
+      - name: Use provided image (image mode)
+        if: steps.cfg.outputs.mode == 'image'
+        run: echo "image=${{ steps.cfg.outputs.image_uri }}" >> $GITHUB_OUTPUT
 
-      - name: Build and push image
+      - name: Register app on instance via SSM
         run: |
-          IMAGE="ghcr.io/${{ github.repository_owner }}/$(basename ${{ github.repository }}):${{ inputs.env }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-        
-
-      - name: Upload app config to SSM
-        run: |
-          # Store the deploy config so EC2 host scripts can read it
-          aws ssm put-parameter \
-            --name "/backenderer/${{ inputs.env }}/config" \
-            --type "String" \
-            --overwrite \
-            --value "$(cat ${{ inputs.config_file }})"
-
-      - name: Register app on EC2 (via SSM)
-        run: |
-          # Remotely execute register.sh on the instance
+          IID="${{ steps.tfout.outputs.instance_id }}"
+          NAME="${{ steps.cfg.outputs.name }}"
+          PORT="${{ steps.cfg.outputs.container_port }}"
+          HOST="${{ steps.cfg.outputs.server_name }}"
+          IMG="$(grep -m1 '^image=' $GITHUB_OUTPUT | cut -d= -f2)"
+          [[ -n "$IID" && -n "$NAME" && -n "$PORT" && -n "$HOST" && -n "$IMG" ]] || { echo "Missing inputs for registration"; exit 1; }
           aws ssm send-command \
+            --targets "Key=instanceIds,Values=$IID" \
             --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ steps.tfout.outputs.instance_id }}" \
-            --comment "Backenderer register app" \
-            --parameters commands='[
-              "set -e",
-              "/opt/backenderer/bin/register.sh /backenderer/${{ inputs.env }}/config"
-            ]' \
+            --comment "Backenderer register" \
+            --parameters "commands=[\"/usr/bin/bash /opt/backenderer/register.sh ${NAME} ${IMG} ${PORT} ${HOST}\"]" \
             --output text
-        
-
-      - name: Setup TLS with Let’s Encrypt (optional)
-        if: ${{ inputs.tls_mode == 'letsencrypt' }}
-        run: |
-          # Install certbot on the instance and request cert for your host
-          aws ssm send-command \
-            --document-name "AWS-RunShellScript" \
-            --instance-ids "${{ steps.tfout.outputs.instance_id }}" \
-            --comment "Install certbot + request certificate" \
-            --parameters commands='[
-              "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -y && sudo apt-get install -y certbot python3-certbot-nginx; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y certbot python3-certbot-nginx; elif command -v yum >/dev/null 2>&1; then sudo yum install -y certbot python3-certbot-nginx; else echo \"Unsupported package manager\" >&2; exit 1; fi",
-              "sudo certbot --nginx -d $(yq -r .apps[0].host ${{ inputs.config_file }}) --non-interactive --agree-tos -m you@example.com"
-            ]' \
-            --output text
-        #certbot install + issue TLS cert tied to the host in the config.

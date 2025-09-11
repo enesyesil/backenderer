@@ -1,69 +1,52 @@
-name: Infra             
-
-on:                     
-  workflow_dispatch:    
-    inputs:             
+name: Infra
+on:
+  workflow_dispatch:
+    inputs:
       env:
-        description: Which environment to target (dev/prod)
         type: choice
-        required: true
         options: [dev, prod]
+        default: dev
       action:
-        description: What Terraform action to run
         type: choice
-        required: true
         options: [plan, apply, destroy]
+        default: plan
+      tf_version:
+        type: string
+        default: "1.6.6"
 
-permissions:            # Fine-grained token permissions for this workflow
-  id-token: write       
-  contents: read        
-  packages: read        
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
 
 jobs:
-  terraform:           
-    runs-on: ubuntu-latest     
-
-    env:                
-      TF_DIR: infra/terraform/envs/${{ inputs.env }}  
-      AWS_REGION: ${{ secrets.AWS_REGION }}          
-
+  terraform:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4   # Pulls our repo code into the runner
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.tf_version }}
 
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}  
-          aws-region: ${{ env.AWS_REGION }}                  # Region for API calls
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Setup Terraform CLI
-        uses: hashicorp/setup-terraform@v3    # Installs Terraform on runner
-        with:
-          terraform_version: 1.13.0           
+      - name: Terraform Init
+        run: terraform -chdir=infra/terraform/envs/${{ inputs.env }} init -upgrade
 
-      - name: Terraform Init (S3 per-env)
-        shell: bash
+      - name: Terraform ${{ inputs.action }}
         run: |
-          set -euo pipefail
-          # Initialize backend pointing to S3; key splits state by env (dev/prod)
-          terraform -chdir="$TF_DIR" init \
-            -backend-config="bucket=${{ secrets.TFSTATE_BUCKET }}" \
-            -backend-config="key=backenderer/${{ inputs.env }}/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="encrypt=true"
-
-      - name: Terraform Validate
-        run: terraform -chdir="$TF_DIR" validate   # Sanity-check 
-
-      - name: Terraform Plan
-        if: inputs.action == 'plan'
-        run: terraform -chdir="$TF_DIR" plan -input=false   # Show what would change??
-
-      - name: Terraform Apply
-        if: inputs.action == 'apply'
-        run: terraform -chdir="$TF_DIR" apply -auto-approve -input=false  # Make some changes
-
-      - name: Terraform Destroy
-        if: inputs.action == 'destroy'
-        run: terraform -chdir="$TF_DIR" destroy -auto-approve -input=false  # Tear it down baby!
+          cd infra/terraform/envs/${{ inputs.env }}
+          case "${{ inputs.action }}" in
+            plan) terraform plan ;;
+            apply) terraform apply -auto-approve ;;
+            destroy) terraform destroy -auto-approve ;;
+          esac
