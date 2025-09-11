@@ -1,33 +1,18 @@
 #!/usr/bin/env bash
-# Usage: unregister.sh <name>
 set -euo pipefail
+[[ "$#" -eq 1 ]] || { echo "Usage: $0 <name>" >&2; exit 2; }
 
-if [[ "$#" -ne 1 ]]; then
-  echo "Usage: $0 <name>" >&2
-  exit 2
-fi
+NAME="$1"; BASE=/opt/backenderer; IDX="$BASE/apps.json"; VHOST="/etc/nginx/conf.d/${NAME}.conf"
 
-NAME="$1"
-BASE=/opt/backenderer
-IDX="$BASE/apps.json"
-VHOST="/etc/nginx/conf.d/${NAME}.conf"
 
-# Stop/remove container if exists
-if docker ps -a --format '{{.Names}}' | grep -q "^$NAME$"; then
-  docker rm -f "$NAME" || true
-fi
+sudo docker rm -f "$NAME" >/dev/null 2>&1 || true
 
-# Remove vhost if exists
-[[ -f "$VHOST" ]] && rm -f "$VHOST"
+sudo rm -f "$VHOST"
 
-# Test & reload Nginx (non-fatal if it fails)
-nginx -t && systemctl reload nginx || true
+sudo nginx -t && sudo systemctl reload nginx || true
 
-# Update index
-if [[ -f "$IDX" ]]; then
-  TMP="$(mktemp)"
-  jq "del(.\"$NAME\")" "$IDX" > "$TMP" || echo '{}' > "$TMP"
-  mv "$TMP" "$IDX"
-fi
+if [[ -f "$IDX" ]]; then TMP=$(mktemp); jq "del(.\"$NAME\")" "$IDX" | sudo tee "$TMP" >/dev/null && sudo mv "$TMP" "$IDX"; fi
+
+
 
 echo "Unregistered ${NAME}"

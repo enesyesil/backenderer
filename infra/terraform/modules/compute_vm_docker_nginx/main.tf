@@ -1,39 +1,36 @@
-variable "name_prefix" { type = string }
-variable "ami_id" { type = string }
-variable "instance_type" { type = string }
-variable "subnet_id" { type = string }
-variable "security_group_ids" { type = list(string) }
-variable "iam_instance_profile" { type = string }
-variable "env" { type = string }
+
+data "aws_subnet" "sel" { id = var.subnet_id }
 
 resource "aws_security_group" "vm_sg" {
   name        = "${var.name_prefix}-sg"
   description = "Backenderer security group"
+  vpc_id      = data.aws_subnet.sel.vpc_id
 
-  # Allow HTTP
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
+ingress { 
+  from_port = 80  
+  to_port = 80  
+  protocol = "tcp" 
+  cidr_blocks = ["0.0.0.0/0"]
+     }
+
+ingress { 
+  from_port = 443 
+  to_port = 443 
+  protocol = "tcp" 
+  cidr_blocks = ["0.0.0.0/0"]
+     }
+
+  egress  {
+    from_port = 0   
+    to_port = 0   
+    protocol = "-1"  
     cidr_blocks = ["0.0.0.0/0"]
-  }
+     
+     }
+}
 
-  # Allow HTTPS
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # No SSH!
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+locals {
+  user_data = file("${path.module}/../../../scripts/bootstrap.sh")
 }
 
 resource "aws_instance" "web" {
@@ -43,22 +40,10 @@ resource "aws_instance" "web" {
   vpc_security_group_ids      = concat([aws_security_group.vm_sg.id], var.security_group_ids)
   iam_instance_profile        = var.iam_instance_profile
   associate_public_ip_address = true
-  key_name                    = null
+  user_data                   = local.user_data
 
-  user_data = templatefile("${path.module}/user_data.tpl", {
-    name_prefix = var.name_prefix
-  })
-
-  tags = {
-    Name        = "${var.name_prefix}-vm"
-    Backenderer = var.env
-  }
+  tags = { Name = "${var.name_prefix}-vm", Backenderer = var.env }
 }
 
-output "public_ip" {
-  value = aws_instance.web.public_ip
-}
-
-output "instance_id" {
-  value = aws_instance.web.id
-}
+output "public_ip"   { value = aws_instance.web.public_ip }
+output "instance_id" { value = aws_instance.web.id }
