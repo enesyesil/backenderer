@@ -26,6 +26,12 @@ variable "instance_type" {
   default = "t3.small"
 }
 
+variable "name_prefix" {
+  type        = string
+  description = "Prefix for naming AWS resources (e.g., repo or project name)."
+  default     = "backenderer"
+}
+
 # If your module supports passing an existing instance profile name/arn for SSM/ECR.
 variable "instance_profile" {
   type        = string
