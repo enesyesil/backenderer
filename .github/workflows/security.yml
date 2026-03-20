@@ -15,6 +15,9 @@ on:
 
 permissions: {}
 
+env:
+  TRIVY_VERSION: "v0.65.0"
+
 jobs:
   secrets:
     name: Secret Scan
@@ -23,20 +26,26 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install Trivy CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" "$TRIVY_VERSION"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+
       - name: Trivy secret scan
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: secret
-          hide-progress: true
-          format: table
-          exit-code: "1"
+        run: |
+          trivy fs \
+            --scanners secret \
+            --no-progress \
+            --exit-code 1 \
+            .
 
   terraform-config:
     name: Terraform Security Scan
@@ -45,21 +54,27 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 
+      - name: Install Trivy CLI
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/trivy-bin"
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" "$TRIVY_VERSION"
+          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
+
       - name: Trivy config scan
-        id: trivy_config
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          scan-type: config
-          scan-ref: .
-          hide-progress: true
-          format: table
-          output: trivy-config.txt
-          severity: HIGH,CRITICAL
-          exit-code: "0"
+        run: |
+          trivy config \
+            --severity HIGH,CRITICAL \
+            --format table \
+            --output trivy-config.txt \
+            --exit-code 0 \
+            --no-progress \
+            .
 
       - name: Publish Trivy config results
         if: always()
