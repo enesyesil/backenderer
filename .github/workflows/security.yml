@@ -16,7 +16,7 @@ on:
 permissions: {}
 
 env:
-  TRIVY_VERSION: "v0.65.0"
+  TRIVY_IMAGE: "aquasec/trivy:0.69.3"
 
 jobs:
   secrets:
@@ -31,17 +31,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install Trivy CLI
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/trivy-bin"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" "$TRIVY_VERSION"
-          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
-
       - name: Trivy secret scan
         run: |
-          trivy fs \
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "${TRIVY_IMAGE}" \
+            fs \
             --scanners secret \
             --no-progress \
             --exit-code 1 \
@@ -58,20 +54,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Trivy CLI
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/trivy-bin"
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b "$RUNNER_TEMP/trivy-bin" "$TRIVY_VERSION"
-          echo "$RUNNER_TEMP/trivy-bin" >> "$GITHUB_PATH"
-
       - name: Trivy config scan
         run: |
-          trivy config \
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            "${TRIVY_IMAGE}" \
+            config \
             --severity HIGH,CRITICAL \
             --format table \
-            --output trivy-config.txt \
+            --output /work/trivy-config.txt \
             --exit-code 0 \
             --no-progress \
             .
