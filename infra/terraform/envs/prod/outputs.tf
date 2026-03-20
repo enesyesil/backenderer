@@ -1,32 +1,44 @@
-#############################
-# Production Environment Outputs
-#############################
-
-# GitHub OIDC deploy role
 output "role_arn" {
-  description = "IAM role ARN for GitHub OIDC deploys."
   value       = module.iam_github_oidc.role_arn
+  description = "IAM role ARN for GitHub OIDC deploys."
 }
 
-# EC2 host
 output "instance_id" {
-  description = "EC2 instance ID."
   value       = module.compute.instance_id
+  description = "EC2 instance ID."
 }
 
 output "instance_public_ip" {
+  value       = module.compute.public_ip
   description = "EC2 public IP address."
-  value       = module.compute.instance_public_ip
 }
 
-# ECR repo URL (module name/attr may differ; try handles either)
 output "ecr_repo_url" {
-  description = "ECR repo URL if created."
-  value       = try(module.ecr.repo_url, module.ecr.ecr_repo_url, null)
+  value       = module.ecr.repository_url
+  description = "ECR repository URL if created."
 }
 
-# ALB DNS name (only if TLS module created an ALB)
+output "tls_mode" {
+  value       = module.dns_tls.mode
+  description = "Configured TLS mode."
+}
+
+output "a_record_fqdns" {
+  value       = module.dns_tls.a_record_fqdns
+  description = "Only when DNS records are created in none mode."
+}
+
 output "alb_dns_name" {
-  description = "ALB DNS name (if using ALB/TLS)."
-  value       = try(module.dns_tls.alb_dns_name, null)
+  value       = module.dns_tls.alb_dns_name
+  description = "Only when tls_mode = alb_acm."
+}
+
+output "acm_certificate_arn" {
+  value       = module.dns_tls.acm_certificate_arn
+  description = "Only when tls_mode = alb_acm."
+}
+
+output "instance_profile_name" {
+  value       = module.iam_ec2_instance_profile.instance_profile_name
+  description = "EC2 instance profile attached to the host."
 }

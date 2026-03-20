@@ -1,7 +1,7 @@
 variable "region" {
   description = "AWS region"
   type        = string
-  default     = "us-east-1"
+  default     = "ca-central-1"
 }
 
 variable "env" {
@@ -10,21 +10,9 @@ variable "env" {
   default     = "dev"
 }
 
-# GitHub OIDC inputs
-variable "github_org" {
-  description = "GitHub org name"
-  type        = string
-}
-
 variable "github_repo" {
-  description = "GitHub repo name"
+  description = "GitHub repository in owner/repo form"
   type        = string
-}
-
-variable "github_branch" {
-  description = "Branch for OIDC trust"
-  type        = string
-  default     = "main"
 }
 
 # Compute module inputs
@@ -45,8 +33,6 @@ variable "name_prefix" {
   default     = "backenderer"
 }
 
-
-# ECR module inputs
 variable "create_ecr" {
   description = "Whether to create the ECR repository"
   type        = bool
@@ -54,16 +40,20 @@ variable "create_ecr" {
 }
 
 variable "ecr_repo_name" {
-  description = "Name of the ECR repository"
+  description = "Optional ECR repository name override"
   type        = string
-  default     = "backenderer"
+  default     = null
 }
 
-# TLS / DNS inputs
 variable "tls_mode" {
-  description = "TLS mode: none | letsencrypt | alb_acm"
+  description = "TLS mode: none | alb_acm"
   type        = string
   default     = "none"
+
+  validation {
+    condition     = contains(["none", "alb_acm"], var.tls_mode)
+    error_message = "tls_mode must be one of: none, alb_acm."
+  }
 }
 
 variable "route53_zone_id" {
@@ -72,12 +62,21 @@ variable "route53_zone_id" {
   default     = ""
 }
 
+variable "server_name" {
+  description = "Primary hostname served by this environment"
+  type        = string
+  default     = ""
+}
+
+variable "instance_profile" {
+  type        = string
+  description = "Optional instance profile name/arn for the EC2 host (SSM/ECR access)."
+  default     = null
+}
+
 # Tags
 variable "tags" {
   description = "Common tags"
   type        = map(string)
-  default = {
-    project = "Backenderer"
-    owner   = "dev-team"
-  }
+  default     = {}
 }

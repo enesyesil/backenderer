@@ -3,7 +3,7 @@ output "mode" {
 }
 
 output "a_record_fqdns" {
-  description = "FQDNs created as A records to instance (none/letsencrypt)."
+  description = "FQDNs created as A records to the instance when DNS records are enabled in none mode."
   value       = [for r in aws_route53_record.a_to_instance : r.fqdn]
 }
 

@@ -1,42 +1,29 @@
-variable "org" {
-  description = "GitHub org"
-  type        = string
-}
-
 variable "repo" {
-  description = "GitHub repo"
+  description = "GitHub repository in org/repo form, e.g., Fisor-Analytics/backenderer"
   type        = string
 }
 
-variable "branch" {
-  description = "Branch allowed to assume role"
+variable "oidc_provider_arn" {
+  description = "ARN of the existing GitHub OIDC provider (bootstrap-created)"
   type        = string
-  default     = "main"
 }
 
 variable "role_name" {
-  description = "IAM Role name"
+  description = "Name for the GitHub Actions IAM role"
   type        = string
+  default     = "Backenderer-GitHubActions-Role"
 }
 
-variable "policy_name" {
-  description = "Inline policy name"
+variable "audience" {
+  description = "OIDC audience for GitHub"
   type        = string
+  default     = "sts.amazonaws.com"
 }
 
-variable "region" {
-  description = "AWS region"
-  type        = string
-}
-
-variable "ecr_repo_name" {
-  description = "ECR repo name to scope permissions"
-  type        = string
-}
-
-variable "env" {
-  description = "Environment tag (e.g. dev, prod)"
-  type        = string
+variable "allowed_refs" {
+  description = "List of allowed refs for CI runs (branches/tags). Examples: repo:ORG/REPO:ref:refs/heads/main"
+  type        = list(string)
+  default     = [] # empty = allow all refs in the repo
 }
 
 variable "tags" {

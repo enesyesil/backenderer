@@ -34,3 +34,13 @@ variable "env" {
   description = "Environment name (e.g., dev, prod)"
   type        = string
 }
+
+variable "register_script_content" {
+  description = "Content of the on-host register script"
+  type        = string
+}
+
+variable "unregister_script_content" {
+  description = "Content of the on-host unregister script"
+  type        = string
+}

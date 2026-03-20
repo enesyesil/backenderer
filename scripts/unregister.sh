@@ -2,7 +2,7 @@
 set -euo pipefail
 [[ "$#" -eq 1 ]] || { echo "Usage: $0 <name>" >&2; exit 2; }
 
-NAME="$1"; BASE=/opt/backenderer; IDX="$BASE/apps.json"; VHOST="/etc/nginx/conf.d/${NAME}.conf"
+NAME="$1"; BASE=/opt/backenderer; IDX="$BASE/apps.json"; VHOST="$BASE/nginx/sites-enabled/${NAME}.conf"
 
 
 sudo docker rm -f "$NAME" >/dev/null 2>&1 || true

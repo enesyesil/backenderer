@@ -1,17 +1,13 @@
-name: Deploy App
+name: Deploy
+
 on:
   workflow_dispatch:
     inputs:
       env:
+        description: Environment to deploy
         type: choice
-        options: [dev, prod]
         default: dev
-      config_file:
-        type: string
-        default: "examples/single-app.yaml"
-      tf_version:
-        type: string
-        default: "1.6.6"
+        options: [dev, prod]
 
 permissions:
   id-token: write
@@ -24,65 +20,262 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read deploy config
-        id: cfg
+      - name: Load .env if present
         run: |
-          python3 -m pip install --user yq >/dev/null 2>&1 || true
-          PATH="$HOME/.local/bin:$PATH"
-          echo "name=$(yq -r '.name // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
-          echo "server_name=$(yq -r '.server_name // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
-          echo "container_port=$(yq -r '.container_port // 8080' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
-          echo "image_uri=$(yq -r '.image_uri // empty' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
-          echo "mode=$(yq -r '.mode // \"source\"' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
-          echo "registry=$(yq -r '.registry // \"ecr\"' ${{ inputs.config_file }})" >> $GITHUB_OUTPUT
+          if [ -f ".env" ]; then
+            grep -Ev '^\s*(#|$)' .env >> "$GITHUB_ENV"
+          fi
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Read deploy mode
+        id: cfg_mode
+        uses: mikefarah/yq@v4.44.3
         with:
-          terraform_version: ${{ inputs.tf_version }}
+          cmd: yq -e '.deploy.mode' backenderer.config.yaml
 
-      - name: Configure AWS (OIDC)
+      - name: Read app_name
+        id: cfg_app_name
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -e '.deploy.app_name' backenderer.config.yaml
+
+      - name: Read container_port
+        id: cfg_app_port
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -e '.deploy.container_port' backenderer.config.yaml
+
+      - name: Read server_name
+        id: cfg_server_name
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -e '.deploy.server_name' backenderer.config.yaml
+
+      - name: Read image_uri
+        id: cfg_image_uri
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -r '.deploy.image_uri // ""' backenderer.config.yaml
+
+      - name: Select environment settings
+        id: sel
+        env:
+          AWS_ROLE_ARN_DEV: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          AWS_ROLE_ARN_PROD: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          AWS_REGION_DEV: ${{ vars.AWS_REGION_DEV }}
+          AWS_REGION_PROD: ${{ vars.AWS_REGION_PROD }}
+        run: |
+          set -euo pipefail
+
+          ENVIRONMENT="${{ github.event.inputs.env }}"
+
+          case "$ENVIRONMENT" in
+            dev)
+              ROLE_ARN="$AWS_ROLE_ARN_DEV"
+              AWS_REGION="$AWS_REGION_DEV"
+              ;;
+            prod)
+              ROLE_ARN="$AWS_ROLE_ARN_PROD"
+              AWS_REGION="$AWS_REGION_PROD"
+              ;;
+            *)
+              echo "Unsupported environment: $ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$ROLE_ARN" ] || [ -z "$AWS_REGION" ]; then
+            echo "Missing AWS role or region for $ENVIRONMENT" >&2
+            exit 1
+          fi
+
+          echo "ENV=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "ROLE_ARN=$ROLE_ARN" >> "$GITHUB_OUTPUT"
+          echo "AWS_REGION=$AWS_REGION" >> "$GITHUB_OUTPUT"
+          echo "ECR_REPO_NAME=backenderer-apps-$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      - name: Validate deploy config
+        env:
+          MODE: ${{ steps.cfg_mode.outputs.result }}
+          IMAGE_URI: ${{ steps.cfg_image_uri.outputs.result }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            source)
+              test -f app/Dockerfile || { echo "mode=source requires app/Dockerfile" >&2; exit 1; }
+              ;;
+            image)
+              test -n "$IMAGE_URI" || { echo "mode=image requires deploy.image_uri" >&2; exit 1; }
+              ;;
+            *)
+              echo "Unsupported deploy.mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ steps.sel.outputs.ROLE_ARN }}
+          aws-region: ${{ steps.sel.outputs.AWS_REGION }}
 
-      - name: Fetch Terraform outputs (instance & ECR)
-        id: tfout
+      - name: Resolve target instance
+        id: target
+        env:
+          TARGET_ENV: ${{ steps.sel.outputs.ENV }}
         run: |
-          cd infra/terraform/envs/${{ inputs.env }}
-          terraform init -upgrade
-          terraform output -json > /tmp/outs.json
-          echo "instance_id=$(jq -r '.instance_id.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
-          echo "public_ip=$(jq -r '.public_ip.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
-          echo "ecr_repo_url=$(jq -r '.ecr_repo_url.value // empty' /tmp/outs.json)" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-      - name: Build & push image (source mode)
-        if: steps.cfg.outputs.mode == 'source'
+          INSTANCE_ID="$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:Backenderer,Values=$TARGET_ENV" \
+              "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId | [0]' \
+            --output text)"
+
+          INSTANCE_PUBLIC_IP="$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)"
+
+          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ] || [ -z "$INSTANCE_PUBLIC_IP" ] || [ "$INSTANCE_PUBLIC_IP" = "None" ]; then
+            echo "No running Backenderer instance found for environment $TARGET_ENV" >&2
+            exit 1
+          fi
+
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          echo "INSTANCE_PUBLIC_IP=$INSTANCE_PUBLIC_IP" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        if: ${{ steps.cfg_mode.outputs.result == 'source' }}
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build or select image
+        id: image
+        env:
+          MODE: ${{ steps.cfg_mode.outputs.result }}
+          APP_NAME: ${{ steps.cfg_app_name.outputs.result }}
+          IMAGE_URI_FROM_CONFIG: ${{ steps.cfg_image_uri.outputs.result }}
+          ECR_REPO_NAME: ${{ steps.sel.outputs.ECR_REPO_NAME }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          ECR="${{ steps.tfout.outputs.ecr_repo_url }}"
-          APP="${{ steps.cfg.outputs.name }}"
-          [[ -n "$ECR" && -n "$APP" ]] || { echo "Missing ECR or app name"; exit 1; }
-          aws ecr get-login-password | docker login --username AWS --password-stdin "$(echo "$ECR" | cut -d/ -f1)"
-          docker build -t "$ECR:$APP" ./app
-          docker push "$ECR:$APP"
-          echo "image=$ECR:$APP" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-      - name: Use provided image (image mode)
-        if: steps.cfg.outputs.mode == 'image'
-        run: echo "image=${{ steps.cfg.outputs.image_uri }}" >> $GITHUB_OUTPUT
+          if [ "$MODE" = "source" ]; then
+            SHORT_SHA="${GITHUB_SHA::12}"
+            TAG="${APP_NAME}-${SHORT_SHA}"
+            REPOSITORY_URI="$(aws ecr describe-repositories --repository-names "$ECR_REPO_NAME" --query 'repositories[0].repositoryUri' --output text)"
+            test -n "$REPOSITORY_URI" || { echo "ECR repository $ECR_REPO_NAME not found" >&2; exit 1; }
+            IMAGE_URI="${REPOSITORY_URI}:${TAG}"
+            docker build -f app/Dockerfile -t "$IMAGE_URI" ./app
+            docker push "$IMAGE_URI"
+          else
+            IMAGE_URI="$IMAGE_URI_FROM_CONFIG"
+          fi
 
-      - name: Register app on instance via SSM
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Register on EC2 via SSM
+        id: ssm
+        env:
+          INSTANCE_ID: ${{ steps.target.outputs.INSTANCE_ID }}
+          APP_NAME: ${{ steps.cfg_app_name.outputs.result }}
+          IMAGE_URI: ${{ steps.image.outputs.IMAGE_URI }}
+          APP_PORT: ${{ steps.cfg_app_port.outputs.result }}
+          SERVER_NAME: ${{ steps.cfg_server_name.outputs.result }}
+          TARGET_ENV: ${{ steps.sel.outputs.ENV }}
         run: |
-          IID="${{ steps.tfout.outputs.instance_id }}"
-          NAME="${{ steps.cfg.outputs.name }}"
-          PORT="${{ steps.cfg.outputs.container_port }}"
-          HOST="${{ steps.cfg.outputs.server_name }}"
-          IMG="$(grep -m1 '^image=' $GITHUB_OUTPUT | cut -d= -f2)"
-          [[ -n "$IID" && -n "$NAME" && -n "$PORT" && -n "$HOST" && -n "$IMG" ]] || { echo "Missing inputs for registration"; exit 1; }
-          aws ssm send-command \
-            --targets "Key=instanceIds,Values=$IID" \
+          set -euo pipefail
+
+          printf -v REMOTE_CMD '%q %q %q %q %q' \
+            /opt/backenderer/register.sh \
+            "$APP_NAME" \
+            "$IMAGE_URI" \
+            "$APP_PORT" \
+            "$SERVER_NAME"
+
+          COMMAND_ID="$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
-            --comment "Backenderer register" \
-            --parameters "commands=[\"/usr/bin/bash /opt/backenderer/register.sh ${NAME} ${IMG} ${PORT} ${HOST}\"]" \
-            --output text
+            --instance-ids "$INSTANCE_ID" \
+            --comment "Backenderer deploy ${APP_NAME} (${TARGET_ENV})" \
+            --parameters "$(jq -n --arg cmd "$REMOTE_CMD" '{commands: [$cmd]}')" \
+            --query 'Command.CommandId' \
+            --output text)"
+
+          echo "COMMAND_ID=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for SSM command
+        env:
+          COMMAND_ID: ${{ steps.ssm.outputs.COMMAND_ID }}
+          INSTANCE_ID: ${{ steps.target.outputs.INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+
+          ATTEMPT=0
+          STATUS=""
+
+          while :; do
+            STATUS="$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'Status' \
+              --output text 2>/dev/null || true)"
+
+            case "$STATUS" in
+              Success|Cancelled|TimedOut|Failed|Cancelling)
+                break
+                ;;
+              Pending|InProgress|Delayed|"")
+                ATTEMPT=$((ATTEMPT + 1))
+                if [ "$ATTEMPT" -ge 60 ]; then
+                  echo "Timed out waiting for SSM command $COMMAND_ID" >&2
+                  exit 1
+                fi
+                sleep 5
+                ;;
+              *)
+                echo "Unexpected SSM status: $STATUS" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          STDOUT="$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' \
+            --output text)"
+
+          STDERR="$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'StandardErrorContent' \
+            --output text)"
+
+          {
+            echo "## Deploy command output"
+            echo
+            echo "- Status: $STATUS"
+            echo "- Command ID: $COMMAND_ID"
+            echo
+            echo "### stdout"
+            echo '```'
+            echo "$STDOUT"
+            echo '```'
+            echo
+            echo "### stderr"
+            echo '```'
+            echo "$STDERR"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "SSM command failed with status $STATUS" >&2
+            exit 1
+          fi
+
+      - name: Health check
+        env:
+          INSTANCE_PUBLIC_IP: ${{ steps.target.outputs.INSTANCE_PUBLIC_IP }}
+        run: |
+          curl --retry 10 --retry-delay 5 --retry-all-errors -fsS \
+            "http://${INSTANCE_PUBLIC_IP}/backenderer/health"

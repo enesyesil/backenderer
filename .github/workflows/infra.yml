@@ -1,52 +1,224 @@
 name: Infra
+
 on:
   workflow_dispatch:
     inputs:
       env:
+        description: Environment
         type: choice
-        options: [dev, prod]
         default: dev
-      action:
-        type: choice
-        options: [plan, apply, destroy]
-        default: plan
-      tf_version:
-        type: string
-        default: "1.6.6"
+        options: [dev, prod]
+      apply:
+        description: Apply changes (true) or just plan (false)
+        type: boolean
+        default: false
+  push:
+    paths:
+      - ".github/workflows/infra.yml"
+      - "backenderer.config.yaml"
+      - "infra/terraform/**"
+      - "scripts/**"
 
 permissions:
   id-token: write
   contents: read
 
 env:
-  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.8.5"
 
 jobs:
-  terraform:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load .env if present
+        run: |
+          if [ -f ".env" ]; then
+            grep -Ev '^\s*(#|$)' .env >> "$GITHUB_ENV"
+          fi
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ inputs.tf_version }}
+          terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS (OIDC)
+      - name: Validate shell scripts
+        run: bash -n scripts/bootstrap.sh scripts/register.sh scripts/unregister.sh
+
+      - name: Terraform validate (dev)
+        run: |
+          terraform -chdir=infra/terraform/envs/dev init -backend=false
+          terraform -chdir=infra/terraform/envs/dev validate
+
+      - name: Terraform validate (prod)
+        run: |
+          terraform -chdir=infra/terraform/envs/prod init -backend=false
+          terraform -chdir=infra/terraform/envs/prod validate
+
+  tf:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Load .env if present
+        run: |
+          if [ -f ".env" ]; then
+            grep -Ev '^\s*(#|$)' .env >> "$GITHUB_ENV"
+          fi
+
+      - name: Read server_name from config
+        id: cfg_server_name
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -e '.deploy.server_name' backenderer.config.yaml
+
+      - name: Select environment settings
+        id: sel
+        env:
+          AWS_ROLE_ARN_DEV: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          AWS_ROLE_ARN_PROD: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          AWS_REGION_DEV: ${{ vars.AWS_REGION_DEV }}
+          AWS_REGION_PROD: ${{ vars.AWS_REGION_PROD }}
+          DEV_AMI_ID: ${{ vars.DEV_AMI_ID }}
+          DEV_INSTANCE_TYPE: ${{ vars.DEV_INSTANCE_TYPE }}
+          DEV_NAME_PREFIX: ${{ vars.DEV_NAME_PREFIX }}
+          DEV_TLS_MODE: ${{ vars.DEV_TLS_MODE }}
+          DEV_ROUTE53_ZONE_ID: ${{ vars.DEV_ROUTE53_ZONE_ID }}
+          DEV_INSTANCE_PROFILE: ${{ vars.DEV_INSTANCE_PROFILE }}
+          PROD_AMI_ID: ${{ vars.PROD_AMI_ID }}
+          PROD_INSTANCE_TYPE: ${{ vars.PROD_INSTANCE_TYPE }}
+          PROD_NAME_PREFIX: ${{ vars.PROD_NAME_PREFIX }}
+          PROD_TLS_MODE: ${{ vars.PROD_TLS_MODE }}
+          PROD_ROUTE53_ZONE_ID: ${{ vars.PROD_ROUTE53_ZONE_ID }}
+          PROD_INSTANCE_PROFILE: ${{ vars.PROD_INSTANCE_PROFILE }}
+          TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
+          TFSTATE_REGION: ${{ vars.TFSTATE_REGION }}
+        run: |
+          set -euo pipefail
+
+          require() {
+            local name="$1"
+            local value="$2"
+            if [ -z "$value" ]; then
+              echo "Missing required configuration: $name" >&2
+              exit 1
+            fi
+          }
+
+          ENVIRONMENT="${{ github.event.inputs.env }}"
+
+          case "$ENVIRONMENT" in
+            dev)
+              ROLE_ARN="$AWS_ROLE_ARN_DEV"
+              AWS_REGION="$AWS_REGION_DEV"
+              AMI_ID="$DEV_AMI_ID"
+              INSTANCE_TYPE="${DEV_INSTANCE_TYPE:-t3.micro}"
+              NAME_PREFIX="${DEV_NAME_PREFIX:-backenderer}"
+              TLS_MODE="${DEV_TLS_MODE:-none}"
+              ROUTE53_ZONE_ID="${DEV_ROUTE53_ZONE_ID:-}"
+              INSTANCE_PROFILE="${DEV_INSTANCE_PROFILE:-}"
+              TF_DIR="infra/terraform/envs/dev"
+              ;;
+            prod)
+              ROLE_ARN="$AWS_ROLE_ARN_PROD"
+              AWS_REGION="$AWS_REGION_PROD"
+              AMI_ID="$PROD_AMI_ID"
+              INSTANCE_TYPE="${PROD_INSTANCE_TYPE:-t3.small}"
+              NAME_PREFIX="${PROD_NAME_PREFIX:-backenderer}"
+              TLS_MODE="${PROD_TLS_MODE:-alb_acm}"
+              ROUTE53_ZONE_ID="${PROD_ROUTE53_ZONE_ID:-}"
+              INSTANCE_PROFILE="${PROD_INSTANCE_PROFILE:-}"
+              TF_DIR="infra/terraform/envs/prod"
+              ;;
+            *)
+              echo "Unsupported environment: $ENVIRONMENT" >&2
+              exit 1
+              ;;
+          esac
+
+          require "ROLE_ARN" "$ROLE_ARN"
+          require "AWS_REGION" "$AWS_REGION"
+          require "AMI_ID" "$AMI_ID"
+          require "TFSTATE_BUCKET" "$TFSTATE_BUCKET"
+          require "TFSTATE_REGION" "$TFSTATE_REGION"
+
+          echo "ENV=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_OUTPUT"
+          echo "ROLE_ARN=$ROLE_ARN" >> "$GITHUB_OUTPUT"
+          echo "AWS_REGION=$AWS_REGION" >> "$GITHUB_OUTPUT"
+          echo "AMI_ID=$AMI_ID" >> "$GITHUB_OUTPUT"
+          echo "INSTANCE_TYPE=$INSTANCE_TYPE" >> "$GITHUB_OUTPUT"
+          echo "NAME_PREFIX=$NAME_PREFIX" >> "$GITHUB_OUTPUT"
+          echo "TLS_MODE=$TLS_MODE" >> "$GITHUB_OUTPUT"
+          echo "ROUTE53_ZONE_ID=$ROUTE53_ZONE_ID" >> "$GITHUB_OUTPUT"
+          echo "INSTANCE_PROFILE=$INSTANCE_PROFILE" >> "$GITHUB_OUTPUT"
+          echo "TFSTATE_BUCKET=$TFSTATE_BUCKET" >> "$GITHUB_OUTPUT"
+          echo "TFSTATE_REGION=$TFSTATE_REGION" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ steps.sel.outputs.ROLE_ARN }}
+          aws-region: ${{ steps.sel.outputs.AWS_REGION }}
 
-      - name: Terraform Init
-        run: terraform -chdir=infra/terraform/envs/${{ inputs.env }} init -upgrade
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Terraform ${{ inputs.action }}
+      - name: Render CI Terraform variables
+        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        env:
+          GITHUB_REPO: ${{ github.repository }}
+          ENVIRONMENT: ${{ steps.sel.outputs.ENV }}
+          AMI_ID: ${{ steps.sel.outputs.AMI_ID }}
+          INSTANCE_TYPE: ${{ steps.sel.outputs.INSTANCE_TYPE }}
+          NAME_PREFIX: ${{ steps.sel.outputs.NAME_PREFIX }}
+          TLS_MODE: ${{ steps.sel.outputs.TLS_MODE }}
+          ROUTE53_ZONE_ID: ${{ steps.sel.outputs.ROUTE53_ZONE_ID }}
+          INSTANCE_PROFILE: ${{ steps.sel.outputs.INSTANCE_PROFILE }}
+          SERVER_NAME: ${{ steps.cfg_server_name.outputs.result }}
         run: |
-          cd infra/terraform/envs/${{ inputs.env }}
-          case "${{ inputs.action }}" in
-            plan) terraform plan ;;
-            apply) terraform apply -auto-approve ;;
-            destroy) terraform destroy -auto-approve ;;
-          esac
+          set -euo pipefail
+          jq -n \
+            --arg github_repo "$GITHUB_REPO" \
+            --arg env "$ENVIRONMENT" \
+            --arg ami_id "$AMI_ID" \
+            --arg instance_type "$INSTANCE_TYPE" \
+            --arg name_prefix "$NAME_PREFIX" \
+            --arg tls_mode "$TLS_MODE" \
+            --arg route53_zone_id "$ROUTE53_ZONE_ID" \
+            --arg instance_profile "$INSTANCE_PROFILE" \
+            --arg server_name "$SERVER_NAME" \
+            '{
+              github_repo: $github_repo,
+              env: $env,
+              ami_id: $ami_id,
+              instance_type: $instance_type,
+              name_prefix: $name_prefix,
+              tls_mode: $tls_mode,
+              route53_zone_id: $route53_zone_id,
+              server_name: $server_name
+            } + (if $instance_profile != "" then {instance_profile: $instance_profile} else {} end)' > ci.auto.tfvars.json
+
+      - name: Terraform init
+        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="bucket=${{ steps.sel.outputs.TFSTATE_BUCKET }}" \
+            -backend-config="key=envs/${{ steps.sel.outputs.ENV }}/terraform.tfstate" \
+            -backend-config="region=${{ steps.sel.outputs.TFSTATE_REGION }}"
+
+      - name: Terraform plan
+        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        run: terraform plan -var-file=ci.auto.tfvars.json -no-color
+
+      - name: Terraform apply
+        if: ${{ github.event.inputs.apply == 'true' }}
+        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        run: terraform apply -auto-approve -var-file=ci.auto.tfvars.json

@@ -10,11 +10,11 @@ set -euo pipefail
 NAME="$1"; IMAGE="$2"; CPORT="$3"; SNAME="$4"
 
 
-BASE=/opt/backenderer; IDX="$BASE/apps.json"; VHOST_DIR=/etc/nginx/conf.d
+BASE=/opt/backenderer; IDX="$BASE/apps.json"; VHOST_DIR="$BASE/nginx/sites-enabled"
 PORT_BASE="${PORT_BASE:-18000}"
 
 
-sudo mkdir -p "$BASE"
+sudo mkdir -p "$BASE" "$VHOST_DIR"
 test -f "$IDX" || echo '{}' | sudo tee "$IDX" >/dev/null
 
 
