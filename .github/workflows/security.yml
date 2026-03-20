@@ -16,7 +16,7 @@ on:
 permissions: {}
 
 env:
-  TRIVY_IMAGE: "aquasec/trivy:0.69.3"
+  TRIVY_IMAGE: "aquasec/trivy:0.68.2"
 
 jobs:
   secrets:
@@ -39,7 +39,6 @@ jobs:
             "${TRIVY_IMAGE}" \
             fs \
             --scanners secret \
-            --no-progress \
             --exit-code 1 \
             .
 
@@ -65,7 +64,6 @@ jobs:
             --format table \
             --output /work/trivy-config.txt \
             --exit-code 0 \
-            --no-progress \
             .
 
       - name: Publish Trivy config results
