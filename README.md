@@ -113,7 +113,7 @@ The `Remove Stack` workflow now performs a full Terraform destroy for the select
 The `Security` workflow runs on pull requests and relevant pushes.
 
 - Secret scanning: Trivy filesystem secret scan fails the workflow on detected secrets.
-- Terraform/IaC scanning: Trivy config scan uploads `HIGH` and `CRITICAL` findings to GitHub code scanning.
+- Terraform/IaC scanning: Trivy config scan summarizes `HIGH` and `CRITICAL` findings in the workflow summary.
 
 ## Docs
 - [Config Reference](infra/docs/quickstart.md)

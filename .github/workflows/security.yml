@@ -43,7 +43,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,20 +50,36 @@ jobs:
           persist-credentials: false
 
       - name: Trivy config scan
+        id: trivy_config
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: config
           scan-ref: .
           hide-progress: true
-          format: sarif
-          output: trivy-config.sarif
+          format: table
+          output: trivy-config.txt
           severity: HIGH,CRITICAL
-          limit-severities-for-sarif: true
           exit-code: "0"
 
-      - name: Upload Trivy SARIF
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-config.sarif
-          category: trivy-config
+      - name: Publish Trivy config results
+        if: always()
+        run: |
+          if [ -s trivy-config.txt ]; then
+            {
+              echo "## Terraform security scan"
+              echo
+              echo "<details><summary>Show Trivy findings</summary>"
+              echo
+              echo '```text'
+              cat trivy-config.txt
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Terraform security scan"
+              echo
+              echo "Trivy did not produce any table output."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
