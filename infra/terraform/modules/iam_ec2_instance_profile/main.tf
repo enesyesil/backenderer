@@ -1,6 +1,6 @@
 locals {
-  role_name   = "${var.name_prefix}-ec2-role"
-  prof_name   = "${var.name_prefix}-ec2-instance-profile"
+  role_name = "${var.name_prefix}-ec2-role"
+  prof_name = "${var.name_prefix}-ec2-instance-profile"
 }
 
 data "aws_iam_policy_document" "ec2_trust" {

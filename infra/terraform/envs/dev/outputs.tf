@@ -12,11 +12,16 @@ output "instance_id" {
 
 output "ecr_repo_url" {
   value       = module.ecr.repository_url
-  description = "Null if create_ecr=false"
+  description = "Null if create_ecr = false"
 }
 
 output "tls_mode" {
   value = module.dns_tls.mode
+}
+
+output "a_record_fqdns" {
+  value       = module.dns_tls.a_record_fqdns
+  description = "Only when DNS records are created in none mode"
 }
 
 output "alb_dns_name" {

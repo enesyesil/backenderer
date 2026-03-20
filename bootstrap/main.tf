@@ -4,8 +4,8 @@ terraform {
 
   required_providers {
     aws = {
-        source = "hashicorp/aws"
-        version = ">= 5.0"
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
     }
   }
 
@@ -54,10 +54,10 @@ data "aws_iam_policy_document" "s3_tls_enforce" {
     sid     = "DenyInsecureTransport"
     effect  = "Deny"
     actions = ["s3:*"]
-    principals { 
-    type = "*"
-    identifiers = ["*"] 
-    
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+
     }
 
     resources = [aws_s3_bucket.state.arn, "${aws_s3_bucket.state.arn}/*"]

@@ -1,27 +1,12 @@
-#############################
-# Production Environment Vars
-#############################
-
-variable "github_org" {
-  type        = string
-  description = "GitHub organization or username that owns the app repo."
-}
-
 variable "region" {
   description = "AWS region"
   type        = string
-  default     = "us-east-1"
+  default     = "ca-central-1"
 }
 
 variable "github_repo" {
   type        = string
-  description = "GitHub repository name."
-}
-
-variable "github_branch" {
-  type        = string
-  description = "Branch to deploy from."
-  default     = "main"
+  description = "GitHub repository in owner/repo form."
 }
 
 variable "env" {
@@ -29,7 +14,6 @@ variable "env" {
   description = "Environment name (should be 'prod' for this folder)."
 }
 
-# ==== Compute ====
 variable "ami_id" {
   type        = string
   description = "AMI ID for the EC2 host (e.g., Amazon Linux 2023 for your region)."
@@ -39,7 +23,7 @@ variable "instance_type" {
   type        = string
   description = "EC2 instance type for the host."
   # modest prod default; adjust as needed
-  default     = "t3.small"
+  default = "t3.small"
 }
 
 # If your module supports passing an existing instance profile name/arn for SSM/ECR.
@@ -49,7 +33,6 @@ variable "instance_profile" {
   default     = null
 }
 
-# ==== Container Registry ====
 variable "create_ecr" {
   type        = bool
   description = "Create an ECR repository for images."
@@ -58,39 +41,34 @@ variable "create_ecr" {
 
 variable "ecr_repo_name" {
   type        = string
-  description = "ECR repository name (if create_ecr = true)."
-  default     = "backenderer-apps"
+  description = "Optional ECR repository name override."
+  default     = null
 }
 
-# ==== DNS / TLS ====
 variable "tls_mode" {
   type        = string
-  description = "TLS mode: 'none', 'letsencrypt', or 'alb_acm'."
+  description = "TLS mode: none or alb_acm."
   default     = "none"
   validation {
-    condition     = contains(["none", "letsencrypt", "alb_acm"], var.tls_mode)
-    error_message = "tls_mode must be one of: none, letsencrypt, alb_acm."
+    condition     = contains(["none", "alb_acm"], var.tls_mode)
+    error_message = "tls_mode must be one of: none, alb_acm."
   }
 }
 
 variable "route53_zone_id" {
   type        = string
   description = "Route53 Hosted Zone ID (required if tls_mode uses DNS)."
-  default     = null
+  default     = ""
 }
 
-variable "base_domain" {
+variable "server_name" {
   type        = string
-  description = "Base domain for apps (e.g., apps.example.com). Required if using DNS/TLS."
-  default     = null
+  description = "Primary hostname served by this environment."
+  default     = ""
 }
 
-# Tags
 variable "tags" {
   description = "Common tags"
   type        = map(string)
-  default = {
-    project = "Backenderer"
-    owner   = "dev-team"
-  }
+  default     = {}
 }

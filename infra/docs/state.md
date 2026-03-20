@@ -1,77 +1,32 @@
-# Terraform State (Local vs Remote)
+# Terraform State
 
-**Note:** This repo is stateless by default. For quick testing or single-user setups, local state is fine.
-For production or team use, always enable a remote backend (S3 + DynamoDB) to ensure durability, collaboration, and state locking.
+Backenderer uses remote S3 state by default.
 
-## Quick options
+## Local setup
+Each env includes a `backend.hcl.example` file:
 
-### 1) Local state (default)
-- Do nothing. `terraform init` will use the local backend.
-- Never commit `.tfstate` (repo already ignores it).
+- `infra/terraform/envs/dev/backend.hcl.example`
+- `infra/terraform/envs/prod/backend.hcl.example`
 
-### 2) Remote state (recommended for prod)
-1. Create:
-   - S3 bucket (enable Versioning), e.g. `my-tfstate-bucket`
-   - DynamoDB table for locks, e.g. `terraform-locks` (PK: `LockID` string)
-2. Choose one:
-   - **File-based:** copy `backend.tf.example → backend.tf` in the env folder and fill values.
-   - **CI-based:** set GitHub secrets (see below) and let the workflow pass `-backend-config`.
+Typical local flow:
 
-## CI secrets (optional)
-- `TFSTATE_BUCKET` = your S3 bucket
-- `TF_LOCK_TABLE` = your DynamoDB table
-- `AWS_REGION`    = region of the bucket/table
-
-If set, the Infra workflow will initialize Terraform with remote backend automatically.
-
-## Migrate from local → remote
-From your machine (recommended):
 ```bash
-cd infra/terraform/envs/<dev|prod>
-terraform init -migrate-state
+cd infra/terraform/envs/dev
+cp backend.hcl.example backend.hcl
+# edit backend.hcl
+terraform init -backend-config=backend.hcl
 ```
 
+## CI setup
+The GitHub workflows inject backend settings at init time from:
+- `TFSTATE_BUCKET`
+- `TFSTATE_REGION`
 
-### Roll back to local (not recommended for prod)
+The state key is fixed by environment:
+- `envs/dev/terraform.tfstate`
+- `envs/prod/terraform.tfstate`
 
-Remove/rename backend.tf and:
-```bash
-terraform init -migrate-state -force-copy
-```
-
-
-## Conditional `terraform init` in CI (so forks “just work”)
-In your **Infra** workflow where you run Terraform, swap the init step to this conditional version:
-
-```yaml
-- name: Terraform Init (local or remote)
-  run: |
-    set -e
-    TF_DIR="infra/terraform/envs/${{ inputs.env }}"
-    if [ -n "${{ secrets.TFSTATE_BUCKET }}" ] && [ -n "${{ secrets.TF_LOCK_TABLE }}" ]; then
-      echo "Using remote backend (S3 + DynamoDB)"
-      terraform -chdir="$TF_DIR" init \
-        -backend-config="bucket=${{ secrets.TFSTATE_BUCKET }}" \
-        -backend-config="key=backenderer/${{ inputs.env }}/terraform.tfstate" \
-        -backend-config="region=${{ secrets.AWS_REGION }}" \
-        -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}" \
-        -backend-config="encrypt=true"
-    else
-      echo "Using local backend"
-      terraform -chdir="$TF_DIR" init
-    fi
-```
-
-## Ensure state files are ignored
-
-Double-check your .gitignore (root of repo) has:
-
-# Terraform
-*.tfstate
-*.tfstate.backup
-.terraform/
-.crash
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
+## Notes
+- State locking uses the S3 lockfile support built into Terraform.
+- There is no local-state-first path in the main docs anymore.
+- `.tfstate` files remain gitignored and should never be committed.

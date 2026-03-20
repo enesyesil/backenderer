@@ -1,0 +1,3 @@
+bucket = "your-tfstate-bucket"
+key    = "envs/dev/terraform.tfstate"
+region = "ca-central-1"

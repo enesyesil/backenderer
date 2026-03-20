@@ -1,148 +1,122 @@
-# Backenderer 🚀
+# Backenderer
 
-**Backenderer** is a lightweight, plug-and-play deployment system for backend apps.  
-Fork this repo, add your app (or reference an existing Docker image), connect your AWS account, and deploy in minutes.
+Backenderer is a lightweight AWS deployment template for running a single backend app per deploy on an EC2 host with Docker and Nginx.
 
-##  Features
+## What it does
+- Provisions AWS infrastructure with Terraform
+- Uses GitHub Actions + OIDC for infra, deploy, and destroy workflows
+- Registers app containers on the host through AWS Systems Manager
+- Supports two deploy modes:
+  - `source`: build from `./app`
+  - `image`: deploy any prebuilt image URI
 
-- **Stateless template** → no state committed; safe to fork and reuse.  
-- **Terraform-based infra** → EC2 + Docker + Nginx reverse proxy.  
-- **Secure by default** → OIDC role for GitHub Actions, no SSH access (managed via SSM).  
-- **Config-driven deploys** → describe apps in YAML (`examples/*.yaml`).  
-- **Multi-app hosting** → register/unregister apps dynamically, Nginx handles routing.  
-- **TLS/DNS options** → `none`, `letsencrypt`, or `alb_acm`.  
-- **Extendable** → future support for other clouds/providers.
+## Repo layout
+- `backenderer.config.yaml`: canonical deploy config consumed by workflows
+- `app/`: source build context for `mode: source`
+- `examples/single-app.yaml`: source-mode example config
+- `infra/terraform/envs/{dev,prod}`: environment roots
+- `infra/terraform/modules/`: shared Terraform modules
+- `infra/docs/`: quickstart, remote state, and cost notes
+- `scripts/`: host bootstrap and app registration scripts
+- `.github/workflows/`: `infra`, `deploy`, and `remove`
 
+## Deploy config
+`backenderer.config.yaml` is the single deploy contract:
 
----
+```yaml
+deploy:
+  mode: image
+  app_name: hello-web
+  container_port: 80
+  server_name: _
+  image_uri: nginx:1.27-alpine
+```
 
-
-##  Repo Structure
-
-- `/app/` — Option A: put your app source + Dockerfile here  
-- `/image/ref.txt` — Option B: reference an existing Docker image  
-- `/examples/` — Sample deploy configs (single-app, multi-app)  
-- `/infra/terraform/` — Infra code (dev & prod envs)  
-- `/infra/docs/` — Extra docs (state, config schema, etc.)  
-- `/scripts/` — register/unregister app scripts (run via SSM)  
-- `/.github/workflows/` — CI workflows (infra, deploy, remove)
-
-
----
+Source mode uses `./app` and requires `app/Dockerfile`.
 
 ## Quickstart
+### 1. Configure remote Terraform state
+Backenderer uses remote S3 state by default.
 
-### 1. Bootstrap Infra
-Run Terraform to set up IAM role, EC2 instance, and (optionally) ECR.
+For local Terraform runs:
+
+```bash
+cd infra/terraform/envs/dev
+cp backend.hcl.example backend.hcl
+# edit backend.hcl with your bucket and region
+terraform init -backend-config=backend.hcl
+```
+
+### 2. Configure env-specific GitHub secrets and variables
+Required secrets:
+- `AWS_ROLE_ARN_DEV`
+- `AWS_ROLE_ARN_PROD`
+
+Required repository or environment variables:
+- `TFSTATE_BUCKET`
+- `TFSTATE_REGION`
+- `AWS_REGION_DEV`
+- `AWS_REGION_PROD`
+- `DEV_AMI_ID`
+- `DEV_INSTANCE_TYPE`
+- `DEV_NAME_PREFIX`
+- `DEV_TLS_MODE`
+- `DEV_ROUTE53_ZONE_ID`
+- `DEV_INSTANCE_PROFILE`
+- `PROD_AMI_ID`
+- `PROD_INSTANCE_TYPE`
+- `PROD_NAME_PREFIX`
+- `PROD_TLS_MODE`
+- `PROD_ROUTE53_ZONE_ID`
+- `PROD_INSTANCE_PROFILE`
+
+`server_name` comes from `backenderer.config.yaml`.
+
+### 3. Plan or apply infrastructure
+Use the `Infra` workflow for CI-driven plans and applies.
+
+For local Terraform runs, start from the checked-in tfvars examples:
 
 ```bash
 cd infra/terraform/envs/dev
 cp dev.tfvars.example dev.tfvars
-# edit dev.tfvars with your values (AMI, instance_type, etc.)
-terraform init
-terraform apply -var-file=dev.tfvars
-```
-Terraform will output:
-
-- `role_arn` → for GitHub OIDC
-- `instance_id`, `instance_public_ip`
-- `ecr_repo_url` (if `create_ecr = true`)
-- `alb_dns_name` (if using ALB/TLS)
-
----
-
-### 2. Configure GitHub Actions
-
-In your fork, go to **Settings → Secrets and variables → Actions** and add:
-
-- `AWS_ROLE_ARN` → value = `role_arn` from Terraform
-- `AWS_REGION` → your region (e.g., `us-east-1`)
-
-**Optional (for remote state):**
-- `TFSTATE_BUCKET`
-- `TF_LOCK_TABLE`
-
-### 3. Deploy Your App
-
-Commit a config file (example below) and trigger the **Deploy App** workflow:
-
-```yaml
-# examples/single-app.yaml
-env: dev
-apps:
-  - name: myapp
-    image: ghcr.io/<user>/<repo>:latest
-    host: myapp.localtest.me
-    port: 8080
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=dev.tfvars
 ```
 
-Workflow will:
+### 4. Deploy the app
+Use the `Deploy` workflow with `env=dev` or `env=prod`.
 
-- Build or pull your Docker image  
-- Push to ECR or GHCR  
-- Register the app via SSM on your EC2 host  
-- Update Nginx and reload  
+- `mode: source` builds `./app`, pushes to the env ECR repo, and registers that image on the host
+- `mode: image` skips the build and registers the provided image URI directly
 
-Check health:
+### 5. Verify success
+Backenderer exposes a built-in host health endpoint:
 
 ```bash
-curl http://<server-ip>/backenderer/health
+curl http://<instance-public-ip>/backenderer/health
 ```
----
-##  Environments
 
-- **`dev/`** → defaults for testing (uses local state).  
-- **`prod/`** → production defaults (can use remote state with S3 + DynamoDB).  
+The deploy workflow also waits for the SSM registration command and fails on host-side errors.
 
-See [`infra/docs/state.md`](infra/docs/state.md) for details on enabling remote state.
+## TLS support
+Supported modes for this pass:
+- `none`
+- `alb_acm`
 
----
+`letsencrypt` is intentionally not part of the current public contract.
 
-## Security
+## Destroy behavior
+The `Remove Stack` workflow now performs a full Terraform destroy for the selected environment and requires an explicit confirmation input.
 
-- No SSH access; all operations use AWS Systems Manager (SSM).
-- GitHub Actions authenticates via OIDC to assume an IAM role (no long-lived keys).
-- TLS options: `none`, `letsencrypt`, or `alb_acm` (configure in Terraform).
-- Principle of least privilege: limit the OIDC role to required services (EC2, SSM, ECR, S3/DynamoDB if using remote state).
+## Security checks
+The `Security` workflow runs on pull requests and relevant pushes.
 
----
-
-## Workflows
-
-- **Infra** → plans and applies Terraform (`infra.yml`).  
-- **Deploy App** → builds/pushes app image, registers via SSM (`deploy.yml`).  
-- **Remove Stack** → terminates instance or destroys stack (`remove.yml`).  
-
----
+- Secret scanning: Trivy filesystem secret scan fails the workflow on detected secrets.
+- Terraform/IaC scanning: Trivy config scan uploads `HIGH` and `CRITICAL` findings to GitHub code scanning.
 
 ## Docs
-
-- [`CONFIG.md`](infra/docs/CONFIG.md) → app configuration schema  
-- [`state.md`](infra/docs/state.md) → local vs remote state guide  
-- [`quickstart.md`](infra/docs/quickstart.md) → step-by-step walkthrough  
-- [`cost.md`](infra/docs/cost.md) → estimated AWS costs and budgeting notes  
-
-
----
-
-
-## Roadmap
-
-- Multi-cloud provider support  
-- Auto-scaling groups / spot instances  
-- Metrics & monitoring integration  
-- Terraform modules for VPC, RDS, etc.  
-
----
-
-## Contributing
-
-Fork this repo, use it for your own apps, and feel free to open pull requests with improvements.  
-Issues and feature requests are welcome to help make Backenderer more useful for everyone.  
-
-## License
-
-This project is licensed under the MIT License.  
-See the [LICENSE](LICENSE) file for details.  
-
-
+- [Config Reference](infra/docs/quickstart.md)
+- [Deploy Config Schema](docs/CONFIG.md)
+- [Remote State Guide](infra/docs/state.md)
+- [Cost Notes](infra/docs/cost.md)

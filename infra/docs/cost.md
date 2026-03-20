@@ -5,7 +5,6 @@
 - **ECR storage**: ~$0.10/GB/mo
 - **CloudWatch logs**: ~$0.50 per GB ingested
 - **ALB (if tls_mode=alb_acm)**: ~$18–20/mo + data processed
-- **TLS with Let's Encrypt**: free (just EC2 CPU for certbot)
 
 ---
 

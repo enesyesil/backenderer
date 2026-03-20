@@ -4,15 +4,15 @@
 if command -v dnf >/dev/null 2>&1; then
   PKG_MGR=dnf
   sudo dnf -y update
-  sudo dnf -y install docker nginx
+  sudo dnf -y install docker nginx jq
 elif command -v yum >/dev/null 2>&1; then
   PKG_MGR=yum
   sudo yum -y update
-  sudo yum -y install docker nginx
+  sudo yum -y install docker nginx jq
 elif command -v apt-get >/dev/null 2>&1; then
   PKG_MGR=apt
   sudo apt-get update -y
-  sudo apt-get install -y docker.io nginx
+  sudo apt-get install -y docker.io nginx jq
 else
   echo "Unsupported OS: no dnf/yum/apt-get"; exit 1
 fi
@@ -29,6 +29,16 @@ sudo systemctl start nginx
 # -------- Backenderer FS layout --------
 sudo mkdir -p /opt/backenderer/{apps,bin,state,nginx/sites-available,nginx/sites-enabled}
 sudo chmod -R 755 /opt/backenderer
+
+sudo tee /opt/backenderer/register.sh >/dev/null <<'REGISTER'
+${register_script_content}
+REGISTER
+sudo chmod 755 /opt/backenderer/register.sh
+
+sudo tee /opt/backenderer/unregister.sh >/dev/null <<'UNREGISTER'
+${unregister_script_content}
+UNREGISTER
+sudo chmod 755 /opt/backenderer/unregister.sh
 
 # Ensure Nginx loads our per-app vhosts
 sudo tee /etc/nginx/conf.d/backenderer.conf >/dev/null <<'NGX'
@@ -63,5 +73,8 @@ if ! systemctl is-enabled amazon-ssm-agent >/dev/null 2>&1; then
     sudo systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service || true
   fi
 fi
+
+sudo /opt/backenderer/register.sh --help >/dev/null 2>&1 || true
+sudo /opt/backenderer/unregister.sh --help >/dev/null 2>&1 || true
 
 echo "Bootstrap complete."

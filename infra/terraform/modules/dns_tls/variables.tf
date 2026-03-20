@@ -1,11 +1,11 @@
 variable "mode" {
-  description = "TLS mode: none | letsencrypt | alb_acm"
+  description = "TLS mode: none | alb_acm"
   type        = string
   default     = "none"
 
   validation {
-    condition     = contains(["none", "letsencrypt", "alb_acm"], var.mode)
-    error_message = "mode must be one of: none, letsencrypt, alb_acm."
+    condition     = contains(["none", "alb_acm"], var.mode)
+    error_message = "mode must be one of: none, alb_acm."
   }
 }
 
@@ -18,7 +18,7 @@ variable "domain_names" {
 variable "hosted_zone_id" {
   description = "Route53 hosted zone ID that holds the domains (required for ALB/ACM and for creating A/ALIAS records)."
   type        = string
-  default     = null
+  default     = ""
 }
 
 variable "create_dns_records" {
@@ -27,16 +27,10 @@ variable "create_dns_records" {
   default     = false
 }
 
-variable "tls_email" {
-  description = "Email for Let's Encrypt registration (used by CI/SSM in Step 6)."
-  type        = string
-  default     = null
-}
-
 variable "instance_public_ip" {
   description = "Public IPv4 of the VM (used to create A-records when mode != alb_acm)."
   type        = string
-  default     = null
+  default     = ""
 }
 
 variable "target_instance_id" {
@@ -48,7 +42,7 @@ variable "target_instance_id" {
 variable "vpc_id" {
   description = "VPC ID (required for ALB)."
   type        = string
-  default     = null
+  default     = ""
 }
 
 variable "subnet_ids" {
@@ -66,16 +60,4 @@ variable "tags" {
 variable "env" {
   description = "Environment name (e.g. dev, prod)"
   type        = string
-}
-
-variable "tls_mode" {
-  description = "TLS mode: none | letsencrypt | alb_acm"
-  type        = string
-  default     = "none"
-}
-
-variable "zone_id" {
-  description = "Route53 hosted zone ID"
-  type        = string
-  default     = ""
 }

@@ -1,31 +1,33 @@
 # Backenderer Config
 
-One YAML drives deploys. Use single-app or multi-app.
+`backenderer.config.yaml` is the single source of truth for app deploys.
 
-## Top-level keys
-- `multi_app`: `false` for single-app, `true` for multi.
-- `mode`: `source` (build from `./app`) or `image` (use `image_uri`).
-- `registry`: `ecr` or `ghcr`.
-- `image_prefix`: string prefix for GHCR tags in `mode=source` (e.g., `svc-`).
-- `tls_email`: email used for Let's Encrypt when infra `tls_mode=letsencrypt`.
+## Schema
+- `deploy.mode`: `source` or `image`
+- `deploy.app_name`: lowercase app slug used for the container name and image tag
+- `deploy.container_port`: container port exposed by the app
+- `deploy.server_name`: nginx `server_name`; use `_` for a catch-all host
+- `deploy.image_uri`: required when `deploy.mode = image`
 
-### Single-app
+## Source Mode
+Use source mode when the repo contains `app/Dockerfile`.
+
 ```yaml
-multi_app: false
-mode: source
-registry: ecr
-name: hello
-server_name: hello.example.com
-container_port: 8080
-# image_uri: ... (required if mode=image)
+deploy:
+  mode: source
+  app_name: hello-web
+  container_port: 8080
+  server_name: hello.example.com
 ```
-### Multi-app
+
+## Image Mode
+Use image mode when you want to deploy a prebuilt image from any registry.
+
 ```yaml
-multi_app: true
-mode: image
-registry: ghcr
-image_prefix: svc-
-apps:
-  - { name: api, server_name: api.example.com, container_port: 8000, image_uri: ghcr.io/org/api:1.0 }
-  - { name: web, server_name: web.example.com, container_port: 3000, image_uri: ghcr.io/org/web:2.0 }
+deploy:
+  mode: image
+  app_name: hello-web
+  container_port: 80
+  server_name: _
+  image_uri: nginx:1.27-alpine
 ```

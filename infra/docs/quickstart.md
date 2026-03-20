@@ -1,142 +1,93 @@
-# Backenderer QuickStart
+# Backenderer Quickstart
 
-Deploy your first app in **3 steps** 🚀
+## 1. Pick a deploy mode
+Backenderer supports one app per deploy.
 
----
+`mode: source`
+- Build from `./app`
+- Requires `app/Dockerfile`
+- Pushes to the env ECR repo before registration
 
-## 1. Bootstrap Infra
-Run Terraform to set up the IAM role, EC2 instance, optional ECR repo, and TLS config.
+`mode: image`
+- Uses a prebuilt image URI
+- Skips build and push
+
+## 2. Edit `backenderer.config.yaml`
+Example:
+
+```yaml
+deploy:
+  mode: image
+  app_name: hello-web
+  container_port: 80
+  server_name: _
+  image_uri: nginx:1.27-alpine
+```
+
+Use `_` when you want a catch-all host. Use a real DNS name when you plan to create Route53 records or `alb_acm` resources.
+
+## 3. Configure remote state
+Backenderer uses remote S3 state by default.
+
+Local setup:
 
 ```bash
 cd infra/terraform/envs/dev
-terraform init
-terraform apply -var-file=dev.tfvars
-```
-Outputs will include:
-
-- role_arn → for GitHub Actions OIDC
-
-- instance_id + instance_public_ip
-
-- ecr_repo_url (if create_ecr = true)
-
-- tls_mode / alb_dns_name
-
-## 2. Configure GitHub Actions
-
-In your repo settings → Actions → Secrets & Variables → Add:
-
-AWS_ROLE_TO_ASSUME → value = role_arn from Terraform
-
-AWS_REGION → same region you deployed to
-
-
-## 3. Deploy Your App
-
-Commit a config file (e.g. examples/single-app.yaml) and trigger the Deploy App workflow:
-
-env: dev
-
-config_file: examples/single-app.yaml
-
-GitHub Actions will:
-
-Build or use your Docker image
-
-Push to ECR or GHCR
-
-Run register.sh on the EC2 instance via SSM
-
-Reload Nginx
-
-Verify health at /backenderer/health
-
-## `infra/docs/config.md`
-
-```md
-# Backenderer Config Reference
-
-One YAML file drives all deploys.
-
----
-
-## Top-level keys
-- `multi_app`: false = single app, true = multiple apps
-- `mode`: source | image
-- `registry`: ecr | ghcr
-- `image_prefix`: prefix for GHCR image tags (when mode=source)
-- `tls_email`: email used for Let's Encrypt certificates
-
----
-
-## Single-App Example
-```yaml
-multi_app: false
-mode: source
-registry: ecr
-name: hello
-server_name: hello.example.com
-container_port: 8080
+cp backend.hcl.example backend.hcl
+# edit backend.hcl
+terraform init -backend-config=backend.hcl
 ```
 
-## Multi-App Example
-```yaml
-multi_app: true
-mode: image
-registry: ghcr
-image_prefix: svc-
-apps:
-  - name: api
-    server_name: api.example.com
-    container_port: 8000
-    image_uri: ghcr.io/org/backenderer-api:1.2.3
-  - name: web
-    server_name: web.example.com
-    container_port: 3000
-    image_uri: ghcr.io/org/backenderer-web:2.3.4
+CI setup:
+- `TFSTATE_BUCKET`
+- `TFSTATE_REGION`
+
+## 4. Configure GitHub secrets and variables
+Secrets:
+- `AWS_ROLE_ARN_DEV`
+- `AWS_ROLE_ARN_PROD`
+
+Variables:
+- `AWS_REGION_DEV`
+- `AWS_REGION_PROD`
+- `DEV_AMI_ID`
+- `DEV_INSTANCE_TYPE`
+- `DEV_NAME_PREFIX`
+- `DEV_TLS_MODE`
+- `DEV_ROUTE53_ZONE_ID`
+- `DEV_INSTANCE_PROFILE`
+- `PROD_AMI_ID`
+- `PROD_INSTANCE_TYPE`
+- `PROD_NAME_PREFIX`
+- `PROD_TLS_MODE`
+- `PROD_ROUTE53_ZONE_ID`
+- `PROD_INSTANCE_PROFILE`
+
+`server_name` is read from `backenderer.config.yaml`.
+
+## 5. Run infrastructure
+Use the `Infra` workflow for plans and applies.
+
+For local runs, copy the env example and supply backend config:
+
+```bash
+cd infra/terraform/envs/dev
+cp dev.tfvars.example dev.tfvars
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=dev.tfvars
 ```
 
-#### Registry Behavior
+## 6. Deploy
+Use the `Deploy` workflow with `env=dev` or `env=prod`.
 
-- registry: ecr → images tagged as <ecr_repo_url>:<app-name>
+The workflow will:
+- validate the config
+- build or select the image
+- register the app on the host over SSM
+- wait for command completion
+- run a host health check
 
-- registry: ghcr → images tagged as ghcr.io/<owner>/<image_prefix><name>:<short-sha>
+## 7. Destroy
+Use the `Remove Stack` workflow when you want a full Terraform destroy.
 
-
-
-#### TLS Options
-
-- Set in envs/dev/variables.tf or tfvars:
-
-- none → plain HTTP
-
-- letsencrypt → EC2 runs Certbot & auto-renews
-
-- alb_acm → Application Load Balancer with ACM certs
-
-## `infra/docs/troubleshooting.md`
-
-
-# Troubleshooting Guide
-
-### OIDC Role Error
-- Check `AWS_ROLE_TO_ASSUME` is set correctly in GitHub Secrets
-- Run `aws sts get-caller-identity` in your GitHub Actions logs
-
-### SSM Command Timeout
-- Confirm EC2 has `Backenderer=<env>` tag
-- Check IAM role policy condition matches your env (`dev` / `prod`)
-
-### Nginx Reload Failure
-- `register.sh` validates config before reload
-- See CloudWatch logs: `/var/log/nginx/error.log`
-
-### Health Check Fails
-- Make sure your app responds to `/backenderer/health`
-- If using TLS=letsencrypt, certbot may take 1–2 minutes to complete
-
-### TLS Errors
-- Let's Encrypt: rate limits → switch to `dns-01` mode if testing a lot
-- ALB/ACM: cert must be validated in Route53
-
-
+You must type the selected env name again in `confirm_env` before destroy is allowed.
