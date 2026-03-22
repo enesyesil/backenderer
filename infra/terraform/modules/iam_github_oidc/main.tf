@@ -1,6 +1,24 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_partition" "current" {}
+
+data "aws_region" "current" {}
+
 locals {
   # If allowed_refs is empty, allow the whole repo (all branches/tags)
-  sub_values = length(var.allowed_refs) > 0 ? var.allowed_refs : ["repo:${var.repo}:*"]
+  sub_values                   = length(var.allowed_refs) > 0 ? var.allowed_refs : ["repo:${var.repo}:*"]
+  account_id                   = data.aws_caller_identity.current.account_id
+  partition                    = data.aws_partition.current.partition
+  region                       = data.aws_region.current.name
+  state_bucket_arn             = "arn:${local.partition}:s3:::${var.state_bucket_name}"
+  ecr_repository_arn           = "arn:${local.partition}:ecr:${local.region}:${local.account_id}:repository/${var.ecr_repository_name}"
+  route53_zone_arn             = trimspace(var.route53_zone_id) != "" ? "arn:${local.partition}:route53:::hostedzone/${var.route53_zone_id}" : null
+  certificate_arn_pattern      = "arn:${local.partition}:acm:${local.region}:${local.account_id}:certificate/*"
+  role_arn_pattern             = "arn:${local.partition}:iam::${local.account_id}:role/${var.resource_prefix}-*"
+  instance_profile_arn_pattern = "arn:${local.partition}:iam::${local.account_id}:instance-profile/${var.resource_prefix}-*"
+  aws_run_shell_script_arn     = "arn:${local.partition}:ssm:${local.region}::document/AWS-RunShellScript"
+  instance_arn_pattern         = "arn:${local.partition}:ec2:${local.region}:${local.account_id}:instance/*"
+  command_arn_pattern          = "arn:${local.partition}:ssm:${local.region}:${local.account_id}:command/*"
 }
 
 data "aws_iam_policy_document" "gh_trust" {
@@ -41,61 +59,237 @@ data "aws_iam_policy_document" "gh_ci" {
     actions = [
       "s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"
     ]
+    resources = [local.state_bucket_arn, "${local.state_bucket_arn}/*"]
+  }
+
+  statement {
+    sid = "ECRAuth"
+    actions = [
+      "ecr:GetAuthorizationToken"
+    ]
     resources = ["*"]
   }
 
   statement {
-    sid = "ECRPushPull"
+    sid = "ECRRepositoryRead"
     actions = [
-      "ecr:GetAuthorizationToken",
+      "ecr:CreateRepository",
+      "ecr:DescribeRepositories"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "ECRRepositoryWrite"
+    actions = [
       "ecr:BatchCheckLayerAvailability",
-      "ecr:CompleteLayerUpload",
-      "ecr:InitiateLayerUpload",
-      "ecr:PutImage",
-      "ecr:UploadLayerPart",
       "ecr:BatchGetImage",
+      "ecr:CompleteLayerUpload",
+      "ecr:DeleteRepository",
       "ecr:GetDownloadUrlForLayer",
-      "ecr:DescribeRepositories",
-      "ecr:CreateRepository"
+      "ecr:InitiateLayerUpload",
+      "ecr:ListImages",
+      "ecr:ListTagsForResource",
+      "ecr:PutImage",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+      "ecr:UploadLayerPart"
     ]
-    resources = ["*"]
+    resources = [local.ecr_repository_arn]
   }
 
   statement {
-    sid = "EC2DescribeAndSSM"
+    sid = "TerraformComputeAndNetworking"
     actions = [
+      "ec2:AllocateAddress",
+      "ec2:AssociateAddress",
+      "ec2:AttachInternetGateway",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:CreateInternetGateway",
+      "ec2:CreateNatGateway",
+      "ec2:CreateRoute",
+      "ec2:CreateRouteTable",
+      "ec2:CreateSecurityGroup",
+      "ec2:CreateSubnet",
+      "ec2:CreateTags",
+      "ec2:CreateVpc",
+      "ec2:DeleteInternetGateway",
+      "ec2:DeleteNatGateway",
+      "ec2:DeleteRoute",
+      "ec2:DeleteRouteTable",
+      "ec2:DeleteSecurityGroup",
+      "ec2:DeleteSubnet",
+      "ec2:DeleteTags",
+      "ec2:DeleteVpc",
       "ec2:Describe*",
-      "ssm:SendCommand",
-      "ssm:ListCommands",
-      "ssm:ListCommandInvocations",
-      "iam:PassRole"
+      "ec2:DetachInternetGateway",
+      "ec2:DisassociateAddress",
+      "ec2:DisassociateRouteTable",
+      "ec2:ModifyInstanceAttribute",
+      "ec2:ModifySubnetAttribute",
+      "ec2:ModifyVpcAttribute",
+      "ec2:ReleaseAddress",
+      "ec2:ReplaceRoute",
+      "ec2:RevokeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:RunInstances",
+      "ec2:StartInstances",
+      "ec2:StopInstances",
+      "ec2:TerminateInstances"
     ]
     resources = ["*"]
   }
 
   statement {
-    sid = "Route53andACM"
+    sid = "LoadBalancing"
     actions = [
-      "route53:ChangeResourceRecordSets",
-      "route53:ListHostedZonesByName",
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:CreateListener",
+      "elasticloadbalancing:CreateLoadBalancer",
+      "elasticloadbalancing:CreateRule",
+      "elasticloadbalancing:CreateTargetGroup",
+      "elasticloadbalancing:DeleteListener",
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:DeleteRule",
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:DeregisterTargets",
+      "elasticloadbalancing:Describe*",
+      "elasticloadbalancing:ModifyListener",
+      "elasticloadbalancing:ModifyLoadBalancerAttributes",
+      "elasticloadbalancing:ModifyRule",
+      "elasticloadbalancing:ModifyTargetGroup",
+      "elasticloadbalancing:RegisterTargets",
+      "elasticloadbalancing:RemoveTags"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "Route53Read"
+    actions = [
       "route53:GetChange",
-      "acm:RequestCertificate",
-      "acm:DescribeCertificate",
+      "route53:GetHostedZone",
+      "route53:ListHostedZonesByName",
+      "route53:ListResourceRecordSets"
+    ]
+    resources = ["*"]
+  }
+
+  dynamic "statement" {
+    for_each = trimspace(var.route53_zone_id) != "" ? [local.route53_zone_arn] : []
+
+    content {
+      sid = "Route53Write"
+      actions = [
+        "route53:ChangeResourceRecordSets"
+      ]
+      resources = [statement.value]
+    }
+  }
+
+  statement {
+    sid = "ACMReadAndRequest"
+    actions = [
       "acm:ListCertificates",
-      "acm:DeleteCertificate"
+      "acm:RequestCertificate"
     ]
     resources = ["*"]
   }
 
   statement {
-    sid = "Logs"
+    sid = "ACMCertificateManagement"
     actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-      "logs:DescribeLogStreams"
+      "acm:AddTagsToCertificate",
+      "acm:DeleteCertificate",
+      "acm:DescribeCertificate",
+      "acm:ListTagsForCertificate",
+      "acm:RemoveTagsFromCertificate"
+    ]
+    resources = [local.certificate_arn_pattern]
+  }
+
+  statement {
+    sid = "SSMSendCommand"
+    actions = [
+      "ssm:SendCommand"
+    ]
+    resources = [
+      local.aws_run_shell_script_arn,
+      local.instance_arn_pattern
+    ]
+  }
+
+  statement {
+    sid = "SSMCommandRead"
+    actions = [
+      "ssm:GetCommandInvocation",
+      "ssm:ListCommandInvocations",
+      "ssm:ListCommands"
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid = "IAMRead"
+    actions = [
+      "iam:GetOpenIDConnectProvider",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:GetRole",
+      "iam:GetRolePolicy",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+      "iam:ListOpenIDConnectProviders",
+      "iam:ListRolePolicies"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "IAMCreateManagedRoles"
+    actions = [
+      "iam:CreateRole"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "IAMManagedRoles"
+    actions = [
+      "iam:AttachRolePolicy",
+      "iam:DeleteRole",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PassRole",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy"
+    ]
+    resources = [local.role_arn_pattern]
+  }
+
+  statement {
+    sid = "IAMCreateInstanceProfiles"
+    actions = [
+      "iam:CreateInstanceProfile"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "IAMInstanceProfiles"
+    actions = [
+      "iam:AddRoleToInstanceProfile",
+      "iam:DeleteInstanceProfile",
+      "iam:GetInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:UntagInstanceProfile"
+    ]
+    resources = [local.instance_profile_arn_pattern]
   }
 }
 

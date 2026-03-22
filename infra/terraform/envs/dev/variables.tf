@@ -15,6 +15,27 @@ variable "github_repo" {
   type        = string
 }
 
+variable "health_path" {
+  description = "Application health-check path served by the deployed app."
+  type        = string
+  default     = "/"
+
+  validation {
+    condition     = startswith(var.health_path, "/")
+    error_message = "health_path must start with '/'."
+  }
+}
+
+variable "oidc_provider_arn" {
+  description = "ARN of the shared GitHub OIDC provider created by bootstrap."
+  type        = string
+}
+
+variable "state_bucket_name" {
+  description = "Terraform state bucket name used by CI and IAM policies."
+  type        = string
+}
+
 # Compute module inputs
 variable "ami_id" {
   description = "AMI ID for the EC2 instance"
@@ -31,18 +52,6 @@ variable "name_prefix" {
   description = "Prefix for naming AWS resources (e.g., repo or project name)"
   type        = string
   default     = "backenderer"
-}
-
-variable "create_ecr" {
-  description = "Whether to create the ECR repository"
-  type        = bool
-  default     = true
-}
-
-variable "ecr_repo_name" {
-  description = "Optional ECR repository name override"
-  type        = string
-  default     = null
 }
 
 variable "tls_mode" {

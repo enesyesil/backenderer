@@ -9,6 +9,27 @@ variable "github_repo" {
   description = "GitHub repository in owner/repo form."
 }
 
+variable "health_path" {
+  description = "Application health-check path served by the deployed app."
+  type        = string
+  default     = "/"
+
+  validation {
+    condition     = startswith(var.health_path, "/")
+    error_message = "health_path must start with '/'."
+  }
+}
+
+variable "oidc_provider_arn" {
+  type        = string
+  description = "ARN of the shared GitHub OIDC provider created by bootstrap."
+}
+
+variable "state_bucket_name" {
+  type        = string
+  description = "Terraform state bucket name used by CI and IAM policies."
+}
+
 variable "env" {
   type        = string
   description = "Environment name (should be 'prod' for this folder)."
@@ -39,22 +60,10 @@ variable "instance_profile" {
   default     = null
 }
 
-variable "create_ecr" {
-  type        = bool
-  description = "Create an ECR repository for images."
-  default     = true
-}
-
-variable "ecr_repo_name" {
-  type        = string
-  description = "Optional ECR repository name override."
-  default     = null
-}
-
 variable "tls_mode" {
   type        = string
   description = "TLS mode: none or alb_acm."
-  default     = "none"
+  default     = "alb_acm"
   validation {
     condition     = contains(["none", "alb_acm"], var.tls_mode)
     error_message = "tls_mode must be one of: none, alb_acm."

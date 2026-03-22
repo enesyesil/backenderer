@@ -1,4 +1,14 @@
 output "repository_url" {
-  description = "ECR repository URL (or null if not created)"
-  value       = var.create_ecr ? aws_ecr_repository.this[0].repository_url : null
+  description = "ECR repository URL."
+  value       = aws_ecr_repository.this.repository_url
+}
+
+output "repository_arn" {
+  description = "ECR repository ARN."
+  value       = aws_ecr_repository.this.arn
+}
+
+output "repository_name" {
+  description = "ECR repository name."
+  value       = aws_ecr_repository.this.name
 }

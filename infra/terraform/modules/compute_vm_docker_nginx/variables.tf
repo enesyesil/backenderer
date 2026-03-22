@@ -19,6 +19,24 @@ variable "subnet_id" {
   type        = string
 }
 
+variable "assign_public_ip" {
+  description = "Whether to associate a public IPv4 address with the host."
+  type        = bool
+  default     = true
+}
+
+variable "public_ingress_enabled" {
+  description = "Whether to allow direct public ingress to the host."
+  type        = bool
+  default     = false
+}
+
+variable "public_ingress_port" {
+  description = "Public ingress port exposed when direct ingress is enabled."
+  type        = number
+  default     = 80
+}
+
 variable "security_group_ids" {
   description = "Additional security group IDs to attach"
   type        = list(string)

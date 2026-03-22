@@ -12,6 +12,11 @@ output "alb_dns_name" {
   value       = try(aws_lb.this[0].dns_name, null)
 }
 
+output "alb_security_group_id" {
+  description = "Security group ID attached to the ALB."
+  value       = try(aws_security_group.alb[0].id, null)
+}
+
 output "alb_zone_id" {
   description = "ALB hosted zone id (mode=alb_acm)."
   value       = try(aws_lb.this[0].zone_id, null)

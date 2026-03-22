@@ -1,6 +1,4 @@
 resource "aws_ecr_repository" "this" {
-  count = var.create_ecr ? 1 : 0
-
   name         = var.repo_name
   force_delete = true
 
