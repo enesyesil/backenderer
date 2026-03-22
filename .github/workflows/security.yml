@@ -56,6 +56,9 @@ jobs:
 
       - name: Trivy config scan
         run: |
+          # Staged rollout: keep config findings visible but non-blocking until the
+          # repo baseline is clean. Change --exit-code to 1 when you're ready to
+          # enforce HIGH/CRITICAL findings as a required check.
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \

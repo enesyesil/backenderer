@@ -31,6 +31,11 @@ resource "aws_instance" "web" {
   vpc_security_group_ids      = concat([aws_security_group.vm_sg.id], var.security_group_ids)
   iam_instance_profile        = var.iam_instance_profile
   associate_public_ip_address = var.assign_public_ip
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
   user_data = templatefile("${path.module}/user_data.tpl", {
     register_script_content   = var.register_script_content
     unregister_script_content = var.unregister_script_content

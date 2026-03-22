@@ -7,7 +7,7 @@
 - `deploy.app_name`: lowercase app slug used for the container name and image tag
 - `deploy.container_port`: container port exposed by the app
 - `deploy.health_path`: optional application health-check path; defaults to `/`
-- `deploy.server_name`: nginx `server_name`; use `_` for a catch-all host
+- `deploy.server_name`: nginx `server_name`; use `_` for a catch-all host, otherwise use a single hostname or wildcard hostname such as `api.example.com` or `*.example.com`
 - `deploy.image_uri`: required when `deploy.mode = image`
 
 ## Source Mode
@@ -36,3 +36,6 @@ deploy:
   server_name: _
   image_uri: nginx:1.27-alpine
 ```
+
+## Local verification
+Run `./scripts/validate_config.sh backenderer.config.yaml` to verify the config contract locally.

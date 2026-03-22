@@ -10,6 +10,8 @@ terraform init
 terraform apply -var='project=backenderer'
 ```
 
+Choose a project slug that is unique for your AWS account naming scheme. The default `backenderer` is fine only if `${project}-tf-state` is available.
+
 This creates:
 - the Terraform state bucket
 - the shared GitHub OIDC provider
@@ -78,16 +80,11 @@ Set repository or environment secrets:
 - `AWS_ROLE_ARN_PROD` = `infra/terraform/envs/prod` output `role_arn`
 
 After this, the `Infra`, `Deploy`, and `Remove Stack` workflows can assume the per-environment roles through GitHub OIDC.
+Those roles trust `refs/heads/main` by default unless you change the allowed refs in the env roots.
 
 ## 5. Sanity-check the repo contract
 Before relying on CI, run the local checks that mirror the workflow validate job:
 
 ```bash
-bash -n scripts/bootstrap.sh scripts/register.sh scripts/unregister.sh
-terraform -chdir=bootstrap init -backend=false
-terraform -chdir=bootstrap validate
-terraform -chdir=infra/terraform/envs/dev init -backend=false
-terraform -chdir=infra/terraform/envs/dev validate
-terraform -chdir=infra/terraform/envs/prod init -backend=false
-terraform -chdir=infra/terraform/envs/prod validate
+./scripts/preflight.sh
 ```
