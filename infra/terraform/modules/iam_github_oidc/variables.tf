@@ -26,6 +26,27 @@ variable "allowed_refs" {
   default     = [] # empty = allow all refs in the repo
 }
 
+variable "ecr_repository_name" {
+  description = "Managed ECR repository name for the environment."
+  type        = string
+}
+
+variable "resource_prefix" {
+  description = "Prefix used for Terraform-managed IAM resources in this environment."
+  type        = string
+}
+
+variable "route53_zone_id" {
+  description = "Optional Route53 zone ID used by the environment."
+  type        = string
+  default     = ""
+}
+
+variable "state_bucket_name" {
+  description = "Terraform state bucket name used by CI."
+  type        = string
+}
+
 variable "tags" {
   description = "Common tags"
   type        = map(string)

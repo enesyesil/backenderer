@@ -15,6 +15,11 @@ variable "domain_names" {
   default     = []
 }
 
+variable "name_prefix" {
+  description = "Prefix for DNS and load balancer resource names."
+  type        = string
+}
+
 variable "hosted_zone_id" {
   description = "Route53 hosted zone ID that holds the domains (required for ALB/ACM and for creating A/ALIAS records)."
   type        = string
@@ -46,9 +51,15 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "Subnets for the ALB. If empty, default VPC subnets are used."
+  description = "Subnets for the ALB."
   type        = list(string)
   default     = []
+}
+
+variable "health_path" {
+  description = "Path used for ALB and deploy-time application health checks."
+  type        = string
+  default     = "/"
 }
 
 variable "tags" {

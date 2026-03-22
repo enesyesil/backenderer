@@ -2,4 +2,5 @@ deploy:
   mode: source
   app_name: hello-web
   container_port: 8080
+  health_path: /health
   server_name: hello.example.com

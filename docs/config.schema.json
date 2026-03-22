@@ -23,6 +23,11 @@
           "minimum": 1,
           "maximum": 65535
         },
+        "health_path": {
+          "type": "string",
+          "default": "/",
+          "pattern": "^/"
+        },
         "server_name": {
           "type": "string",
           "minLength": 1

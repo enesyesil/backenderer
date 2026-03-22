@@ -13,6 +13,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: backenderer-${{ github.event.inputs.env || 'remove' }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read
@@ -46,6 +50,12 @@ jobs:
         with:
           cmd: yq -e '.deploy.server_name' backenderer.config.yaml
 
+      - name: Read health_path from config
+        id: cfg_health_path
+        uses: mikefarah/yq@v4.44.3
+        with:
+          cmd: yq -r '.deploy.health_path // "/"' backenderer.config.yaml
+
       - name: Select environment settings
         id: sel
         env:
@@ -53,6 +63,7 @@ jobs:
           AWS_ROLE_ARN_PROD: ${{ secrets.AWS_ROLE_ARN_PROD }}
           AWS_REGION_DEV: ${{ vars.AWS_REGION_DEV }}
           AWS_REGION_PROD: ${{ vars.AWS_REGION_PROD }}
+          GITHUB_OIDC_PROVIDER_ARN: ${{ vars.GITHUB_OIDC_PROVIDER_ARN }}
           DEV_AMI_ID: ${{ vars.DEV_AMI_ID }}
           DEV_INSTANCE_TYPE: ${{ vars.DEV_INSTANCE_TYPE }}
           DEV_NAME_PREFIX: ${{ vars.DEV_NAME_PREFIX }}
@@ -113,6 +124,7 @@ jobs:
           require "ROLE_ARN" "$ROLE_ARN"
           require "AWS_REGION" "$AWS_REGION"
           require "AMI_ID" "$AMI_ID"
+          require "GITHUB_OIDC_PROVIDER_ARN" "$GITHUB_OIDC_PROVIDER_ARN"
           require "TFSTATE_BUCKET" "$TFSTATE_BUCKET"
           require "TFSTATE_REGION" "$TFSTATE_REGION"
 
@@ -120,6 +132,7 @@ jobs:
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_OUTPUT"
           echo "ROLE_ARN=$ROLE_ARN" >> "$GITHUB_OUTPUT"
           echo "AWS_REGION=$AWS_REGION" >> "$GITHUB_OUTPUT"
+          echo "GITHUB_OIDC_PROVIDER_ARN=$GITHUB_OIDC_PROVIDER_ARN" >> "$GITHUB_OUTPUT"
           echo "AMI_ID=$AMI_ID" >> "$GITHUB_OUTPUT"
           echo "INSTANCE_TYPE=$INSTANCE_TYPE" >> "$GITHUB_OUTPUT"
           echo "NAME_PREFIX=$NAME_PREFIX" >> "$GITHUB_OUTPUT"
@@ -145,7 +158,10 @@ jobs:
         env:
           GITHUB_REPO: ${{ github.repository }}
           ENVIRONMENT: ${{ steps.sel.outputs.ENV }}
+          OIDC_PROVIDER_ARN: ${{ steps.sel.outputs.GITHUB_OIDC_PROVIDER_ARN }}
+          STATE_BUCKET_NAME: ${{ steps.sel.outputs.TFSTATE_BUCKET }}
           AMI_ID: ${{ steps.sel.outputs.AMI_ID }}
+          HEALTH_PATH: ${{ steps.cfg_health_path.outputs.result }}
           INSTANCE_TYPE: ${{ steps.sel.outputs.INSTANCE_TYPE }}
           NAME_PREFIX: ${{ steps.sel.outputs.NAME_PREFIX }}
           TLS_MODE: ${{ steps.sel.outputs.TLS_MODE }}
@@ -156,8 +172,10 @@ jobs:
           set -euo pipefail
           jq -n \
             --arg github_repo "$GITHUB_REPO" \
+            --arg oidc_provider_arn "$OIDC_PROVIDER_ARN" \
             --arg env "$ENVIRONMENT" \
             --arg ami_id "$AMI_ID" \
+            --arg health_path "$HEALTH_PATH" \
             --arg instance_type "$INSTANCE_TYPE" \
             --arg name_prefix "$NAME_PREFIX" \
             --arg tls_mode "$TLS_MODE" \
@@ -166,8 +184,11 @@ jobs:
             --arg server_name "$SERVER_NAME" \
             '{
               github_repo: $github_repo,
+              oidc_provider_arn: $oidc_provider_arn,
+              state_bucket_name: env.STATE_BUCKET_NAME,
               env: $env,
               ami_id: $ami_id,
+              health_path: $health_path,
               instance_type: $instance_type,
               name_prefix: $name_prefix,
               tls_mode: $tls_mode,

@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.11.0"
+  required_version = ">= 1.8.0"
 
 
   required_providers {
@@ -13,6 +13,15 @@ terraform {
 
 provider "aws" {
   region = var.region
+}
+
+module "iam_github_oidc_provider" {
+  source          = "../infra/terraform/modules/iam_github_oidc_provider"
+  create_provider = true
+  tags = merge(var.tags, {
+    project = var.project
+    purpose = "github-oidc"
+  })
 }
 
 resource "aws_s3_bucket" "state" {

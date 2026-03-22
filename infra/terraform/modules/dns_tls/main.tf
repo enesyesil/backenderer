@@ -5,20 +5,24 @@ locals {
   need_dns_records_to_ip = local.is_none && var.create_dns_records && trimspace(var.instance_public_ip) != "" && trimspace(var.hosted_zone_id) != ""
   need_alb               = local.is_alb
   need_acm               = local.is_alb
+  alb_name               = substr("${var.name_prefix}-alb", 0, 32)
+  alb_security_group     = "${var.name_prefix}-alb-sg"
+  target_group_name      = substr("${var.name_prefix}-tg", 0, 32)
 }
 
 locals {
   valid_alb_inputs = !local.is_alb || (
     trimspace(var.vpc_id) != "" &&
     length(var.domain_names) > 0 &&
-    trimspace(var.hosted_zone_id) != ""
+    trimspace(var.hosted_zone_id) != "" &&
+    length(var.subnet_ids) >= 2
   )
 }
 
 check "alb_inputs" {
   assert {
     condition     = local.valid_alb_inputs
-    error_message = "For mode=alb_acm you must provide vpc_id, hosted_zone_id, and at least one domain_names entry."
+    error_message = "For mode=alb_acm you must provide vpc_id, hosted_zone_id, at least one domain_names entry, and two ALB subnets."
   }
 }
 
@@ -32,22 +36,9 @@ resource "aws_route53_record" "a_to_instance" {
   records = [var.instance_public_ip]
 }
 
-##########
-data "aws_subnets" "in_vpc" {
-  count = local.need_alb && trimspace(var.vpc_id) != "" && length(var.subnet_ids) == 0 ? 1 : 0
-  filter {
-    name   = "vpc-id"
-    values = [var.vpc_id]
-  }
-}
-
-locals {
-  alb_subnets = local.need_alb ? (length(var.subnet_ids) > 0 ? var.subnet_ids : try(data.aws_subnets.in_vpc[0].ids, [])) : []
-}
-
 resource "aws_security_group" "alb" {
   count       = local.need_alb ? 1 : 0
-  name        = "backenderer-alb-sg"
+  name        = local.alb_security_group
   description = "Allow 80/443 to ALB"
   vpc_id      = var.vpc_id
 
@@ -76,11 +67,11 @@ resource "aws_security_group" "alb" {
 
 resource "aws_lb" "this" {
   count              = local.need_alb ? 1 : 0
-  name               = "backenderer-alb"
+  name               = local.alb_name
   load_balancer_type = "application"
   internal           = false
   security_groups    = [aws_security_group.alb[0].id]
-  subnets            = local.alb_subnets
+  subnets            = var.subnet_ids
 
   enable_deletion_protection = false
 
@@ -89,7 +80,7 @@ resource "aws_lb" "this" {
 
 resource "aws_lb_target_group" "tg" {
   count    = local.need_alb ? 1 : 0
-  name     = "backenderer-tg"
+  name     = local.target_group_name
   port     = 80
   protocol = "HTTP"
   vpc_id   = var.vpc_id
@@ -97,7 +88,7 @@ resource "aws_lb_target_group" "tg" {
   health_check {
     enabled             = true
     protocol            = "HTTP"
-    path                = "/backenderer/health"
+    path                = var.health_path
     interval            = 30
     healthy_threshold   = 3
     unhealthy_threshold = 3

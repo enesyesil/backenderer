@@ -1,4 +1,3 @@
-
 data "aws_subnet" "sel" { id = var.subnet_id }
 
 resource "aws_security_group" "vm_sg" {
@@ -6,18 +5,15 @@ resource "aws_security_group" "vm_sg" {
   description = "Backenderer security group"
   vpc_id      = data.aws_subnet.sel.vpc_id
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  dynamic "ingress" {
+    for_each = var.public_ingress_enabled ? [var.public_ingress_port] : []
 
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    content {
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
   }
 
   egress {
@@ -25,11 +21,8 @@ resource "aws_security_group" "vm_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-
   }
 }
-
-
 
 resource "aws_instance" "web" {
   ami                         = var.ami_id
@@ -37,7 +30,7 @@ resource "aws_instance" "web" {
   subnet_id                   = var.subnet_id
   vpc_security_group_ids      = concat([aws_security_group.vm_sg.id], var.security_group_ids)
   iam_instance_profile        = var.iam_instance_profile
-  associate_public_ip_address = true
+  associate_public_ip_address = var.assign_public_ip
   user_data = templatefile("${path.module}/user_data.tpl", {
     register_script_content   = var.register_script_content
     unregister_script_content = var.unregister_script_content
