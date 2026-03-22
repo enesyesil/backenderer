@@ -175,11 +175,11 @@ on_exit() {
   local status=$?
 
   if [[ "$status" -ne 0 && "$SUCCESS" -ne 1 ]]; then
-    report_failure_state
-    restore_container_names
-    restore_index
-    restore_vhost
-    cleanup_candidate
+    report_failure_state || true
+    restore_container_names || true
+    restore_index || true
+    restore_vhost || true
+    cleanup_candidate || true
   fi
 
   rm -f "$BACKUP_CONF" "$BACKUP_IDX"
