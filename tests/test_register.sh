@@ -252,6 +252,42 @@ run_register() {
   "$SCRIPT" "$@"
 }
 
+dump_case() {
+  local case_dir="$1"
+  local label="$2"
+
+  echo "[register] debug dump for $label" >&2
+  for file in \
+    "$case_dir/stdout.log" \
+    "$case_dir/stderr.log" \
+    "$case_dir/state/docker.log" \
+    "$case_dir/state/systemctl.log" \
+    "$case_dir/base/apps.json" \
+    "$case_dir/base/nginx/sites-enabled/hello-web.conf"
+  do
+    if [ -f "$file" ]; then
+      echo "--- $file ---" >&2
+      cat "$file" >&2
+    fi
+  done
+
+  echo "--- docker state ---" >&2
+  find "$case_dir/state/docker" -maxdepth 2 -type f | sort | while read -r file; do
+    echo "$file: $(cat "$file")" >&2
+  done
+}
+
+require_case() {
+  local case_dir="$1"
+  local label="$2"
+  shift 2
+
+  if ! "$@"; then
+    dump_case "$case_dir" "$label"
+    exit 1
+  fi
+}
+
 SUCCESS_CASE="$TMP_DIR/success"
 setup_fixture "$SUCCESS_CASE"
 seed_live_app "$SUCCESS_CASE" "18000" "old-image"
@@ -261,29 +297,36 @@ printf '%s' "18001" >"$SUCCESS_CASE/state/docker/hello-web-candidate/host_port"
 printf 'true' >"$SUCCESS_CASE/state/docker/hello-web-candidate/healthy"
 printf '18000\n18001\n' >"$SUCCESS_CASE/state/listening_ports"
 
-run_register "$SUCCESS_CASE" "hello-web" "new-image" "80" "_" "/" >/dev/null
+if ! run_register "$SUCCESS_CASE" "hello-web" "new-image" "80" "_" "/" >"$SUCCESS_CASE/stdout.log" 2>"$SUCCESS_CASE/stderr.log"; then
+  dump_case "$SUCCESS_CASE" "success-case"
+  exit 1
+fi
 
-[ -d "$SUCCESS_CASE/state/docker/hello-web" ]
-[ ! -d "$SUCCESS_CASE/state/docker/hello-web-candidate" ]
-[ "$(jq -r '.["hello-web"].image' "$SUCCESS_CASE/base/apps.json")" = "new-image" ]
-[ "$(jq -r '.["hello-web"].host_port' "$SUCCESS_CASE/base/apps.json")" = "18002" ]
-grep -q 'proxy_pass http://127.0.0.1:18002;' "$SUCCESS_CASE/base/nginx/sites-enabled/hello-web.conf"
+SUCCESS_PORT="$(jq -r '.["hello-web"].host_port' "$SUCCESS_CASE/base/apps.json")"
+
+require_case "$SUCCESS_CASE" "success-case" test -d "$SUCCESS_CASE/state/docker/hello-web"
+require_case "$SUCCESS_CASE" "success-case" test ! -d "$SUCCESS_CASE/state/docker/hello-web-candidate"
+require_case "$SUCCESS_CASE" "success-case" test "$(jq -r '.["hello-web"].image' "$SUCCESS_CASE/base/apps.json")" = "new-image"
+require_case "$SUCCESS_CASE" "success-case" test -n "$SUCCESS_PORT"
+require_case "$SUCCESS_CASE" "success-case" test "$SUCCESS_PORT" != "18000"
+require_case "$SUCCESS_CASE" "success-case" grep -q "proxy_pass http://127.0.0.1:${SUCCESS_PORT};" "$SUCCESS_CASE/base/nginx/sites-enabled/hello-web.conf"
 
 FAIL_CASE="$TMP_DIR/failure"
 setup_fixture "$FAIL_CASE"
 seed_live_app "$FAIL_CASE" "18000" "old-image"
 
 if run_register "$FAIL_CASE" "hello-web" "broken-image" "80" "_" "/" >"$FAIL_CASE/stdout.log" 2>"$FAIL_CASE/stderr.log"; then
+  dump_case "$FAIL_CASE" "failure-case-unexpected-success"
   echo "[register] expected candidate health failure" >&2
   exit 1
 fi
 
-[ -d "$FAIL_CASE/state/docker/hello-web" ]
-[ ! -d "$FAIL_CASE/state/docker/hello-web-candidate" ]
-[ "$(jq -r '.["hello-web"].image' "$FAIL_CASE/base/apps.json")" = "old-image" ]
-[ "$(jq -r '.["hello-web"].host_port' "$FAIL_CASE/base/apps.json")" = "18000" ]
-grep -q 'proxy_pass http://127.0.0.1:18000;' "$FAIL_CASE/base/nginx/sites-enabled/hello-web.conf"
-grep -q 'elapsed_seconds=' "$FAIL_CASE/stderr.log"
-grep -q 'nginx_reloaded=' "$FAIL_CASE/stderr.log"
+require_case "$FAIL_CASE" "failure-case" test -d "$FAIL_CASE/state/docker/hello-web"
+require_case "$FAIL_CASE" "failure-case" test ! -d "$FAIL_CASE/state/docker/hello-web-candidate"
+require_case "$FAIL_CASE" "failure-case" test "$(jq -r '.["hello-web"].image' "$FAIL_CASE/base/apps.json")" = "old-image"
+require_case "$FAIL_CASE" "failure-case" test "$(jq -r '.["hello-web"].host_port' "$FAIL_CASE/base/apps.json")" = "18000"
+require_case "$FAIL_CASE" "failure-case" grep -q 'proxy_pass http://127.0.0.1:18000;' "$FAIL_CASE/base/nginx/sites-enabled/hello-web.conf"
+require_case "$FAIL_CASE" "failure-case" grep -q 'elapsed_seconds=' "$FAIL_CASE/stderr.log"
+require_case "$FAIL_CASE" "failure-case" grep -q 'nginx_reloaded=' "$FAIL_CASE/stderr.log"
 
 echo "[register] passed"
