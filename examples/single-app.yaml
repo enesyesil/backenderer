@@ -1,6 +1,7 @@
 deploy:
-  mode: source
+  mode: image
   app_name: hello-web
-  container_port: 8080
-  health_path: /health
-  server_name: hello.example.com
+  container_port: 80
+  health_path: /
+  server_name: _
+  image_uri: nginx:1.27-alpine

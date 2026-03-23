@@ -31,6 +31,11 @@ variable "ecr_repository_name" {
   type        = string
 }
 
+variable "env" {
+  description = "Environment name used to scope instance-tag access."
+  type        = string
+}
+
 variable "resource_prefix" {
   description = "Prefix used for Terraform-managed IAM resources in this environment."
   type        = string
@@ -51,4 +56,10 @@ variable "tags" {
   description = "Common tags"
   type        = map(string)
   default     = {}
+}
+
+variable "create_resources" {
+  description = "Whether to create IAM resources. Disable only for policy-document tests."
+  type        = bool
+  default     = true
 }

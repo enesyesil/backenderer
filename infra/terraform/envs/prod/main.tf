@@ -17,6 +17,7 @@ module "iam_github_oidc" {
   role_name           = "${local.resource_prefix}-github-actions-role"
   allowed_refs        = ["repo:${var.github_repo}:ref:refs/heads/main"]
   ecr_repository_name = local.repository_name
+  env                 = var.env
   resource_prefix     = local.resource_prefix
   route53_zone_id     = var.route53_zone_id
   state_bucket_name   = var.state_bucket_name

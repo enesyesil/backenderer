@@ -21,7 +21,7 @@ Backenderer supports one app per environment.
 - Private authenticated registry support is limited to ECR
 
 ## 3. Edit `backenderer.config.yaml`
-Example:
+First-success example:
 
 ```yaml
 deploy:
@@ -35,6 +35,7 @@ deploy:
 
 Use `_` when you want a catch-all host.
 Use a real DNS name when you plan to create Route53 records or `alb_acm` resources.
+`server_name` must be `_` or a single hostname / wildcard hostname.
 
 ## 4. Configure GitHub secrets and variables
 Required secrets:
@@ -68,6 +69,7 @@ Conditional variables:
 
 ## 5. Run infrastructure
 Use the `Infra` workflow for plans and applies.
+The generated env roles trust `refs/heads/main` by default, so run the workflow from `main` unless you intentionally widen that policy in Terraform.
 
 For local runs:
 
@@ -80,6 +82,12 @@ terraform init -backend-config=backend.hcl
 terraform plan -var-file=dev.tfvars
 ```
 
+For a full local repo check, run:
+
+```bash
+./scripts/preflight.sh
+```
+
 ## 6. Deploy
 Use the `Deploy` workflow with `env=dev` or `env=prod`.
 
@@ -89,6 +97,7 @@ The workflow will:
 - register the app on the host over SSM
 - wait for command completion
 - fail if the configured `health_path` is not healthy through Nginx
+- fail if more than one running target instance matches `Backenderer=<env>`
 
 ## 7. Destroy
 Use the `Remove Stack` workflow for a full Terraform destroy.

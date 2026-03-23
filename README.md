@@ -13,12 +13,13 @@ Backenderer is a lightweight AWS deployment template for running a single backen
 ## Repo layout
 - `backenderer.config.yaml`: canonical deploy config consumed by workflows
 - `app/`: source build context for `mode: source`
-- `examples/single-app.yaml`: source-mode example config
+- `examples/single-app.yaml`: runnable image-mode example config
 - `bootstrap/`: one-time Terraform bootstrap for remote state + shared GitHub OIDC provider
 - `infra/terraform/envs/{dev,prod}`: environment roots
 - `infra/terraform/modules/`: shared Terraform modules
 - `infra/docs/`: quickstart, bootstrap, remote state, and cost notes
 - `scripts/`: host bootstrap and app registration scripts
+- `tests/`: shell smoke tests for helpers and rollout behavior
 - `.github/workflows/`: `infra`, `deploy`, `remove`, and `security`
 
 ## Deploy config
@@ -78,6 +79,7 @@ Conditional variables:
 
 ### 3. Plan or apply infrastructure
 Use the `Infra` workflow for CI-driven plans and applies.
+The generated env roles trust `refs/heads/main` by default, so `Infra`, `Deploy`, and `Remove Stack` are expected to run from `main` unless you widen the allowed refs in Terraform.
 
 For local Terraform runs:
 
@@ -90,12 +92,19 @@ terraform init -backend-config=backend.hcl
 terraform plan -var-file=dev.tfvars
 ```
 
+For a full local repo check, run:
+
+```bash
+./scripts/preflight.sh
+```
+
 ### 4. Deploy the app
 Use the `Deploy` workflow with `env=dev` or `env=prod`.
 
 - `mode: source` builds `./app`, pushes to `backenderer-apps-<env>`, and registers that image on the host
 - `mode: image` skips the build and registers the provided image URI directly
 - Private authenticated registry support in this repo is limited to ECR
+- The deploy workflow fails unless it finds exactly one running instance tagged `Backenderer=<env>`
 
 ### 5. Verify success
 The deploy workflow now treats success as:
@@ -119,12 +128,17 @@ The `Remove Stack` workflow performs a full Terraform destroy for the selected e
 The `Security` workflow runs on pull requests and relevant pushes.
 
 - Secret scanning: Trivy filesystem secret scan fails the workflow on detected secrets.
-- Terraform/IaC scanning: Trivy config scan summarizes `HIGH` and `CRITICAL` findings in the workflow summary.
+- Terraform/IaC scanning: Trivy config scan summarizes `HIGH` and `CRITICAL` findings in the workflow summary during the staged rollout. See [Security Baseline](docs/SECURITY_BASELINE.md).
+
+## Local env files
+`.env` is treated as a local-only convenience file for scripts and workflow emulation. It should not be committed.
 
 ## Docs
 - [Bootstrap Guide](infra/docs/bootstrap.md)
 - [Quickstart](infra/docs/quickstart.md)
 - [Config Reference](docs/CONFIG.md)
 - [Deploy Config Schema](docs/config.schema.json)
+- [Verification Matrix](docs/VERIFICATION.md)
+- [Security Baseline](docs/SECURITY_BASELINE.md)
 - [Remote State Guide](infra/docs/state.md)
 - [Cost Notes](infra/docs/cost.md)

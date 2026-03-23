@@ -19,6 +19,10 @@ on:
       - "bootstrap/**"
       - "infra/terraform/**"
       - "scripts/**"
+      - "tests/**"
+      - "docs/**"
+      - ".env.example"
+      - "AGENTS.md"
 
 concurrency:
   group: backenderer-${{ github.event.inputs.env || 'validate' }}
@@ -49,89 +53,8 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Read deploy mode
-        id: cfg_mode
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -e '.deploy.mode' backenderer.config.yaml
-
-      - name: Read app_name
-        id: cfg_app_name
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -e '.deploy.app_name' backenderer.config.yaml
-
-      - name: Read container_port
-        id: cfg_app_port
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -e '.deploy.container_port' backenderer.config.yaml
-
-      - name: Read server_name
-        id: cfg_server_name
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -e '.deploy.server_name' backenderer.config.yaml
-
-      - name: Read image_uri
-        id: cfg_image_uri
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -r '.deploy.image_uri // ""' backenderer.config.yaml
-
-      - name: Read health_path
-        id: cfg_health_path
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -r '.deploy.health_path // "/"' backenderer.config.yaml
-
-      - name: Validate deploy config
-        env:
-          MODE: ${{ steps.cfg_mode.outputs.result }}
-          APP_NAME: ${{ steps.cfg_app_name.outputs.result }}
-          APP_PORT: ${{ steps.cfg_app_port.outputs.result }}
-          SERVER_NAME: ${{ steps.cfg_server_name.outputs.result }}
-          IMAGE_URI: ${{ steps.cfg_image_uri.outputs.result }}
-          HEALTH_PATH: ${{ steps.cfg_health_path.outputs.result }}
-        run: |
-          set -euo pipefail
-
-          [[ "$APP_NAME" =~ ^[a-z0-9-]+$ ]] || { echo "deploy.app_name must match ^[a-z0-9-]+$" >&2; exit 1; }
-          [[ "$APP_PORT" =~ ^[0-9]+$ ]] || { echo "deploy.container_port must be numeric" >&2; exit 1; }
-          [ "$APP_PORT" -ge 1 ] && [ "$APP_PORT" -le 65535 ] || { echo "deploy.container_port must be between 1 and 65535" >&2; exit 1; }
-          test -n "$SERVER_NAME" || { echo "deploy.server_name must be non-empty" >&2; exit 1; }
-          [[ "$HEALTH_PATH" == /* ]] || { echo "deploy.health_path must start with /" >&2; exit 1; }
-
-          case "$MODE" in
-            source)
-              test -f app/Dockerfile || { echo "mode=source requires app/Dockerfile" >&2; exit 1; }
-              ;;
-            image)
-              test -n "$IMAGE_URI" || { echo "mode=image requires deploy.image_uri" >&2; exit 1; }
-              ;;
-            *)
-              echo "Unsupported deploy.mode: $MODE" >&2
-              exit 1
-              ;;
-          esac
-
-      - name: Validate shell scripts
-        run: bash -n scripts/bootstrap.sh scripts/register.sh scripts/unregister.sh
-
-      - name: Terraform validate (bootstrap)
-        run: |
-          terraform -chdir=bootstrap init -backend=false
-          terraform -chdir=bootstrap validate
-
-      - name: Terraform validate (dev)
-        run: |
-          terraform -chdir=infra/terraform/envs/dev init -backend=false
-          terraform -chdir=infra/terraform/envs/dev validate
-
-      - name: Terraform validate (prod)
-        run: |
-          terraform -chdir=infra/terraform/envs/prod init -backend=false
-          terraform -chdir=infra/terraform/envs/prod validate
+      - name: Run preflight checks
+        run: ./scripts/preflight.sh
 
   tf:
     if: github.event_name == 'workflow_dispatch'
@@ -147,17 +70,14 @@ jobs:
             grep -Ev '^\s*(#|$)' .env >> "$GITHUB_ENV"
           fi
 
-      - name: Read server_name from config
-        id: cfg_server_name
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -e '.deploy.server_name' backenderer.config.yaml
+      - name: Validate deploy config
+        run: ./scripts/validate_config.sh backenderer.config.yaml
 
-      - name: Read health_path from config
-        id: cfg_health_path
-        uses: mikefarah/yq@v4.44.3
-        with:
-          cmd: yq -r '.deploy.health_path // "/"' backenderer.config.yaml
+      - name: Export deploy config
+        id: cfg
+        run: |
+          ./scripts/read_config_json.sh backenderer.config.yaml \
+            | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_OUTPUT"
 
       - name: Select environment settings
         id: sel
@@ -181,75 +101,13 @@ jobs:
           PROD_INSTANCE_PROFILE: ${{ vars.PROD_INSTANCE_PROFILE }}
           TFSTATE_BUCKET: ${{ vars.TFSTATE_BUCKET }}
           TFSTATE_REGION: ${{ vars.TFSTATE_REGION }}
-        run: |
-          set -euo pipefail
-
-          require() {
-            local name="$1"
-            local value="$2"
-            if [ -z "$value" ]; then
-              echo "Missing required configuration: $name" >&2
-              exit 1
-            fi
-          }
-
-          ENVIRONMENT="${{ github.event.inputs.env }}"
-
-          case "$ENVIRONMENT" in
-            dev)
-              ROLE_ARN="$AWS_ROLE_ARN_DEV"
-              AWS_REGION="$AWS_REGION_DEV"
-              AMI_ID="$DEV_AMI_ID"
-              INSTANCE_TYPE="${DEV_INSTANCE_TYPE:-t3.micro}"
-              NAME_PREFIX="${DEV_NAME_PREFIX:-backenderer}"
-              TLS_MODE="${DEV_TLS_MODE:-none}"
-              ROUTE53_ZONE_ID="${DEV_ROUTE53_ZONE_ID:-}"
-              INSTANCE_PROFILE="${DEV_INSTANCE_PROFILE:-}"
-              TF_DIR="infra/terraform/envs/dev"
-              ;;
-            prod)
-              ROLE_ARN="$AWS_ROLE_ARN_PROD"
-              AWS_REGION="$AWS_REGION_PROD"
-              AMI_ID="$PROD_AMI_ID"
-              INSTANCE_TYPE="${PROD_INSTANCE_TYPE:-t3.small}"
-              NAME_PREFIX="${PROD_NAME_PREFIX:-backenderer}"
-              TLS_MODE="${PROD_TLS_MODE:-alb_acm}"
-              ROUTE53_ZONE_ID="${PROD_ROUTE53_ZONE_ID:-}"
-              INSTANCE_PROFILE="${PROD_INSTANCE_PROFILE:-}"
-              TF_DIR="infra/terraform/envs/prod"
-              ;;
-            *)
-              echo "Unsupported environment: $ENVIRONMENT" >&2
-              exit 1
-              ;;
-          esac
-
-          require "ROLE_ARN" "$ROLE_ARN"
-          require "AWS_REGION" "$AWS_REGION"
-          require "AMI_ID" "$AMI_ID"
-          require "GITHUB_OIDC_PROVIDER_ARN" "$GITHUB_OIDC_PROVIDER_ARN"
-          require "TFSTATE_BUCKET" "$TFSTATE_BUCKET"
-          require "TFSTATE_REGION" "$TFSTATE_REGION"
-
-          echo "ENV=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
-          echo "TF_DIR=$TF_DIR" >> "$GITHUB_OUTPUT"
-          echo "ROLE_ARN=$ROLE_ARN" >> "$GITHUB_OUTPUT"
-          echo "AWS_REGION=$AWS_REGION" >> "$GITHUB_OUTPUT"
-          echo "GITHUB_OIDC_PROVIDER_ARN=$GITHUB_OIDC_PROVIDER_ARN" >> "$GITHUB_OUTPUT"
-          echo "AMI_ID=$AMI_ID" >> "$GITHUB_OUTPUT"
-          echo "INSTANCE_TYPE=$INSTANCE_TYPE" >> "$GITHUB_OUTPUT"
-          echo "NAME_PREFIX=$NAME_PREFIX" >> "$GITHUB_OUTPUT"
-          echo "TLS_MODE=$TLS_MODE" >> "$GITHUB_OUTPUT"
-          echo "ROUTE53_ZONE_ID=$ROUTE53_ZONE_ID" >> "$GITHUB_OUTPUT"
-          echo "INSTANCE_PROFILE=$INSTANCE_PROFILE" >> "$GITHUB_OUTPUT"
-          echo "TFSTATE_BUCKET=$TFSTATE_BUCKET" >> "$GITHUB_OUTPUT"
-          echo "TFSTATE_REGION=$TFSTATE_REGION" >> "$GITHUB_OUTPUT"
+        run: ./scripts/select_env.sh infra "${{ github.event.inputs.env }}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ steps.sel.outputs.ROLE_ARN }}
-          aws-region: ${{ steps.sel.outputs.AWS_REGION }}
+          role-to-assume: ${{ steps.sel.outputs.role_arn }}
+          aws-region: ${{ steps.sel.outputs.aws_region }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -257,61 +115,36 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Render CI Terraform variables
-        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        working-directory: ${{ steps.sel.outputs.tf_dir }}
         env:
           GITHUB_REPO: ${{ github.repository }}
-          ENVIRONMENT: ${{ steps.sel.outputs.ENV }}
-          OIDC_PROVIDER_ARN: ${{ steps.sel.outputs.GITHUB_OIDC_PROVIDER_ARN }}
-          STATE_BUCKET_NAME: ${{ steps.sel.outputs.TFSTATE_BUCKET }}
-          AMI_ID: ${{ steps.sel.outputs.AMI_ID }}
-          HEALTH_PATH: ${{ steps.cfg_health_path.outputs.result }}
-          INSTANCE_TYPE: ${{ steps.sel.outputs.INSTANCE_TYPE }}
-          NAME_PREFIX: ${{ steps.sel.outputs.NAME_PREFIX }}
-          TLS_MODE: ${{ steps.sel.outputs.TLS_MODE }}
-          ROUTE53_ZONE_ID: ${{ steps.sel.outputs.ROUTE53_ZONE_ID }}
-          INSTANCE_PROFILE: ${{ steps.sel.outputs.INSTANCE_PROFILE }}
-          SERVER_NAME: ${{ steps.cfg_server_name.outputs.result }}
-        run: |
-          set -euo pipefail
-          jq -n \
-            --arg github_repo "$GITHUB_REPO" \
-            --arg oidc_provider_arn "$OIDC_PROVIDER_ARN" \
-            --arg env "$ENVIRONMENT" \
-            --arg ami_id "$AMI_ID" \
-            --arg health_path "$HEALTH_PATH" \
-            --arg instance_type "$INSTANCE_TYPE" \
-            --arg name_prefix "$NAME_PREFIX" \
-            --arg tls_mode "$TLS_MODE" \
-            --arg route53_zone_id "$ROUTE53_ZONE_ID" \
-            --arg instance_profile "$INSTANCE_PROFILE" \
-            --arg server_name "$SERVER_NAME" \
-            '{
-              github_repo: $github_repo,
-              oidc_provider_arn: $oidc_provider_arn,
-              state_bucket_name: env.STATE_BUCKET_NAME,
-              env: $env,
-              ami_id: $ami_id,
-              health_path: $health_path,
-              instance_type: $instance_type,
-              name_prefix: $name_prefix,
-              tls_mode: $tls_mode,
-              route53_zone_id: $route53_zone_id,
-              server_name: $server_name
-            } + (if $instance_profile != "" then {instance_profile: $instance_profile} else {} end)' > ci.auto.tfvars.json
+          ENVIRONMENT: ${{ steps.sel.outputs.env }}
+          OIDC_PROVIDER_ARN: ${{ steps.sel.outputs.github_oidc_provider_arn }}
+          STATE_BUCKET_NAME: ${{ steps.sel.outputs.tfstate_bucket }}
+          AWS_REGION: ${{ steps.sel.outputs.aws_region }}
+          AMI_ID: ${{ steps.sel.outputs.ami_id }}
+          HEALTH_PATH: ${{ steps.cfg.outputs.health_path }}
+          INSTANCE_TYPE: ${{ steps.sel.outputs.instance_type }}
+          NAME_PREFIX: ${{ steps.sel.outputs.name_prefix }}
+          TLS_MODE: ${{ steps.sel.outputs.tls_mode }}
+          ROUTE53_ZONE_ID: ${{ steps.sel.outputs.route53_zone_id }}
+          INSTANCE_PROFILE: ${{ steps.sel.outputs.instance_profile }}
+          SERVER_NAME: ${{ steps.cfg.outputs.server_name }}
+        run: ../../../../scripts/render_ci_tfvars.sh ci.auto.tfvars.json
 
       - name: Terraform init
-        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        working-directory: ${{ steps.sel.outputs.tf_dir }}
         run: |
           terraform init -reconfigure \
-            -backend-config="bucket=${{ steps.sel.outputs.TFSTATE_BUCKET }}" \
-            -backend-config="key=envs/${{ steps.sel.outputs.ENV }}/terraform.tfstate" \
-            -backend-config="region=${{ steps.sel.outputs.TFSTATE_REGION }}"
+            -backend-config="bucket=${{ steps.sel.outputs.tfstate_bucket }}" \
+            -backend-config="key=envs/${{ steps.sel.outputs.env }}/terraform.tfstate" \
+            -backend-config="region=${{ steps.sel.outputs.tfstate_region }}"
 
       - name: Terraform plan
-        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        working-directory: ${{ steps.sel.outputs.tf_dir }}
         run: terraform plan -var-file=ci.auto.tfvars.json -no-color
 
       - name: Terraform apply
         if: ${{ github.event.inputs.apply == 'true' }}
-        working-directory: ${{ steps.sel.outputs.TF_DIR }}
+        working-directory: ${{ steps.sel.outputs.tf_dir }}
         run: terraform apply -auto-approve -var-file=ci.auto.tfvars.json

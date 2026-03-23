@@ -46,6 +46,7 @@ data "aws_iam_policy_document" "gh_trust" {
 }
 
 resource "aws_iam_role" "gh_actions" {
+  count              = var.create_resources ? 1 : 0
   name               = var.role_name
   assume_role_policy = data.aws_iam_policy_document.gh_trust.json
   tags               = var.tags
@@ -104,6 +105,7 @@ data "aws_iam_policy_document" "gh_ci" {
     actions = [
       "ec2:AllocateAddress",
       "ec2:AssociateAddress",
+      "ec2:AssociateRouteTable",
       "ec2:AttachInternetGateway",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:AuthorizeSecurityGroupIngress",
@@ -211,14 +213,29 @@ data "aws_iam_policy_document" "gh_ci" {
   }
 
   statement {
-    sid = "SSMSendCommand"
+    sid = "SSMSendCommandDocument"
     actions = [
       "ssm:SendCommand"
     ]
     resources = [
-      local.aws_run_shell_script_arn,
+      local.aws_run_shell_script_arn
+    ]
+  }
+
+  statement {
+    sid = "SSMSendCommandInstances"
+    actions = [
+      "ssm:SendCommand"
+    ]
+    resources = [
       local.instance_arn_pattern
     ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Backenderer"
+      values   = [var.env]
+    }
   }
 
   statement {
@@ -294,6 +311,7 @@ data "aws_iam_policy_document" "gh_ci" {
 }
 
 resource "aws_iam_role_policy" "gh_actions" {
-  role   = aws_iam_role.gh_actions.id
+  count  = var.create_resources ? 1 : 0
+  role   = aws_iam_role.gh_actions[0].id
   policy = data.aws_iam_policy_document.gh_ci.json
 }

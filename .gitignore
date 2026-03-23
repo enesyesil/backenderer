@@ -1,6 +1,9 @@
 # Local .terraform directories
 **/.terraform/*
 
+# Local workflow convenience values
+.env
+
 # .tfstate files
 *.tfstate
 *.tfstate.*
